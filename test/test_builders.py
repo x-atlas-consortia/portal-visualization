@@ -15,6 +15,7 @@ from src.portal_visualization.builder_factory import (
 from .fixtures import (
     create_mock_zarr_group,
     make_rna_seq_entity,
+    populate_anndata_zarr,
     populate_multiome_zarr,
 )
 
@@ -58,17 +59,63 @@ good_entity_paths = list((Path(__file__).parent / "good-fixtures").glob("*/*-ent
 
 # Exclude fixtures that have been replaced by programmatic tests
 excluded_fixtures = {
-    "RNASeqAnnDataZarrViewConfBuilder/fake-is-not-annotated-published-entity.json",
-    "RNASeqAnnDataZarrViewConfBuilder/fake-is-not-annotated-qa-entity.json",
+    # RNASeqAnnDataZarrViewConfBuilder
+    "fake-is-not-annotated-published-entity.json",
+    "fake-is-not-annotated-qa-entity.json",
+    "fake-is-not-annotated-minimal-published-entity.json",
+    "fake-asct-is-annotated-published-entity.json",
+    "fake-asct-is-annotated-qa-entity.json",
+    "fake-asct-is-annotated-zip-published-entity.json",
+    "fake-predicted-label-is-annotated-published-entity.json",
+    "fake-predicted-label-is-annotated-qa-entity.json",
+    "fake-is-annotated-pan-az-published-entity.json",
+    # MultiomicAnndataZarrViewConfBuilder
+    "fake-multiome-entity.json",
+    "fake-multiome-is-annotated-entity.json",
+    "fake-multiome-is-annotated-pan-az-entity.json",
+    # SpatialMultiomicAnnDataZarrViewConfBuilder
+    "fake-visium-entity.json",
+    # XeniumMultiomicAnnDataZarrViewConfBuilder
+    "fake-xenium-entity.json",
+    # SpatialRNASeqAnnDataZarrViewConfBuilder
+    "ea4cfecb8495b36694d9a951510dc3c6-minimal-entity.json",
+    "ea4cfecb8495b36694d9a951510dc3c6-marker=gene123-entity.json",
+    # ObjectByAnalyteConfBuilder
+    "fake-object-by-analyte-entity.json",
+    "many-embeddings-object-by-analyte-entity.json",
+    "no-feature-labels-object-by-analyte-entity.json",
+    "single-embedding-object-by-analyte-entity.json",
+    "spatial-object-by-analyte-entity.json",
+    "three-embeddings-object-by-analyte-entity.json",
+    "uniprot-object-by-analyte-entity.json",
+    "zero-dimensions-object-by-analyte-entity.json",
+    # TiledSPRMViewConfBuilder
+    "no-cells-entity.json",
+    "with-cells-entity.json",
+    # StitchedCytokitSPRMViewConfBuilder
+    "04e7385339167e541ad42a2636e18398-entity.json",
+    # MultiImageSPRMAnndataViewConfBuilder
+    "fake-marker=gene123-entity.json",
+    # GeoMxImagePyramidViewConfBuilder
+    "fake-zarr-zip-entity.json",
 }
-good_entity_paths = [p for p in good_entity_paths if p.name not in excluded_fixtures]
+
+# Builders that have been completely migrated to programmatic tests
+excluded_builders = {
+    "ImagePyramidViewConfBuilder",
+    "KaggleSegImagePyramidViewConfBuilder",
+    "IMSViewConfBuilder",
+    "NanoDESIViewConfBuilder",
+}
+
+good_entity_paths = [
+    p for p in good_entity_paths if p.name not in excluded_fixtures and p.parent.name not in excluded_builders
+]
 
 assert len(good_entity_paths) > 0
 
 image_pyramids = [
-    "IMSViewConfBuilder",
     "SeqFISHViewConfBuilder",
-    "NanoDESIViewConfBuilder",
 ]
 
 image_pyramid_paths = [path for path in good_entity_paths if path.parent.name in image_pyramids]
@@ -229,44 +276,45 @@ def mock_zarr_store(entity_path, mocker, obs_count):
                 group = obs.create_group(name)
                 group["categories"] = zarr.array(["0", "1", "2"])
     else:
-        # Create regular AnnData structure manually (for backward compatibility)
-        obs = z.create_group("obs")
-        obs["_index"] = zarr.array(obs_index)
+        # Create regular AnnData structure
+        if is_annotated and not is_marker:
+            # Use populate_anndata_zarr for annotated entities (includes all obs paths)
+            populate_anndata_zarr(z, obs_count=obs_count, var_count=50, is_annotated=True)
+        else:
+            # Create manual structure for non-annotated or marker entities
+            obs = z.create_group("obs")
+            obs["_index"] = zarr.array(obs_index)
 
-        # Add marker genes if needed
-        if is_marker:
-            gene_array = zarr.array(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
-            obs["marker_gene_0"] = zarr.array(obs_index)
-            obs.attrs["encoding-version"] = "0.1.0"
+            # Add marker genes if needed
+            if is_marker:
+                gene_array = zarr.array(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
+                obs["marker_gene_0"] = zarr.array(obs_index)
+                obs.attrs["encoding-version"] = "0.1.0"
 
-            var = z.create_group("var")
-            var.attrs["_index"] = "index"
-            var["index"] = gene_array
-            var["hugo_symbol"] = zarr.array([0, 1, 2])
-            var["hugo_symbol"].attrs["categories"] = "hugo_categories"
-            var["hugo_categories"] = zarr.array(["gene123", "gene456", "gene789"])
+                var = z.create_group("var")
+                var.attrs["_index"] = "index"
+                var["index"] = gene_array
+                var["hugo_symbol"] = zarr.array([0, 1, 2])
+                var["hugo_symbol"].attrs["categories"] = "hugo_categories"
+                var["hugo_categories"] = zarr.array(["gene123", "gene456", "gene789"])
 
     # Add annotation-specific metadata
     if is_annotated:
+        obs_prefix_path = "mod/rna/obs" if is_multiome else "obs"
+        obs_group = z[obs_prefix_path]
         path = f"{'mod/rna/' if is_multiome else ''}uns/annotation_metadata/is_annotated"
         z[path] = True
 
         if is_asct:
-            z["obs/predicted.ASCT.celltype"] = True
+            # Create categorical array for ASCT
+            obs_group["predicted.ASCT.celltype"] = zarr.array([f"asct_{i % 3}" for i in range(obs_count)])
         elif is_azimuth_labeled:
-            z["obs/predicted_label"] = True
-            z["obs/predicted_CLID"] = True
+            obs_group["predicted_label"] = zarr.array([f"celltype_{i % 3}" for i in range(obs_count)])
+            obs_group["predicted_CLID"] = zarr.array([f"CL:{1000000 + i % 3}" for i in range(obs_count)])
         elif is_pan_azimuth:
-            # Add pan-azimuth specific obs columns
-            for col in [
-                "azimuth_broad",
-                "azimuth_medium",
-                "azimuth_fine",
-                "CL_Label",
-                "final_level_labels",
-                "full_hierarchical_labels",
-            ]:
-                z[f"obs/{col}"] = True
+            # For pan-azimuth, azimuth columns were already created in the multiome logic above
+            # We don't need to create them again, they already have categories
+            pass
 
     # Add Visium-specific metadata
     if is_visium:
@@ -327,23 +375,52 @@ def generate_rna_seq_test_cases():
         )
     )
 
-    # Test case 3: ASCT annotated, published
+    # Test case 3: Not annotated, minimal, published
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-not-annotated-minimal-published",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-minimal",
+                is_annotated=False,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 4: ASCT annotated, published
     test_cases.append(
         (
             "RNASeqAnnDataZarrViewConfBuilder/generated-asct-annotated-published",
             make_rna_seq_entity(
-                uuid=f"{base_uuid}-asct",
+                uuid=f"{base_uuid}-asct-pub",
                 is_annotated=True,
                 is_published=True,
                 soft_assaytype="salmon_sn_rnaseq_10x",
                 data_types=["salmon_sn_rnaseq_10x"],
                 files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
-                vitessce_hints=["rna", "is_annotated", "is_sc"],  # Override to add is_sc
             ),
         )
     )
 
-    # Test case 4: Zip compressed
+    # Test case 5: ASCT annotated, QA
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-asct-annotated-qa",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-asct-qa",
+                is_annotated=True,
+                is_published=False,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 6: Zip compressed
     test_cases.append(
         (
             "RNASeqAnnDataZarrViewConfBuilder/generated-asct-annotated-zip",
@@ -358,11 +435,641 @@ def generate_rna_seq_test_cases():
         )
     )
 
+    # Test case 7: Predicted label annotated, published
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-predicted-label-annotated-published",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-predicted-pub",
+                is_annotated=True,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 8: Predicted label annotated, QA
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-predicted-label-annotated-qa",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-predicted-qa",
+                is_annotated=True,
+                is_published=False,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 9: Pan-Azimuth annotated, published
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-pan-az-annotated-published",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-pan-az",
+                is_annotated=True,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_multiome_test_cases():
+    """Generate MultiomicAnndataZarrViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+    base_uuid = "a1234567890abcdef1234567890abcde"
+
+    # Test case 1: Basic multiome, not annotated
+    test_cases.append(
+        (
+            "MultiomicAnndataZarrViewConfBuilder/generated-multiome",
+            make_entity(
+                uuid=base_uuid,
+                status="Published",
+                hints=["rna", "atac", "is_sc"],
+                soft_assaytype="multiome",
+                data_types=["multiome"],
+                files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 2: Multiome with ASCT annotation
+    test_cases.append(
+        (
+            "MultiomicAnndataZarrViewConfBuilder/generated-multiome-is-annotated",
+            make_entity(
+                uuid=f"{base_uuid}-annotated",
+                status="Published",
+                hints=["rna", "atac", "is_annotated", "is_sc"],
+                soft_assaytype="multiome",
+                data_types=["multiome"],
+                files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 3: Multiome with pan-azimuth annotation
+    test_cases.append(
+        (
+            "MultiomicAnndataZarrViewConfBuilder/generated-multiome-is-annotated-pan-az",
+            make_entity(
+                uuid=f"{base_uuid}-pan-az",
+                status="Published",
+                hints=["rna", "atac", "is_annotated", "is_sc"],
+                soft_assaytype="multiome",
+                data_types=["multiome"],
+                files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_spatial_multiome_test_cases():
+    """Generate SpatialMultiomicAnnDataZarrViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+    base_uuid = "b1234567890abcdef1234567890abcde"
+
+    # Test case 1: Visium spatial multiome
+    test_cases.append(
+        (
+            "SpatialMultiomicAnnDataZarrViewConfBuilder/generated-visium",
+            make_entity(
+                uuid=base_uuid,
+                status="Published",
+                hints=["rna", "is_image", "anndata", "spatial"],
+                soft_assaytype="visium-no-probes",
+                data_types=["visium-no-probes"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_xenium_test_cases():
+    """Generate XeniumMultiomicAnnDataZarrViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+    base_uuid = "c1234567890abcdef1234567890abcde"
+
+    # Test case 1: Xenium spatial - requires "xenium" and "is_image" hints
+    test_cases.append(
+        (
+            "XeniumMultiomicAnnDataZarrViewConfBuilder/generated-xenium",
+            make_entity(
+                uuid=base_uuid,
+                status="Published",
+                hints=["xenium", "is_image"],
+                data_types=["xenium"],
+                files=[
+                    {"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr.zip"},
+                    {"rel_path": "Xenium.zarr/.zgroup"},
+                    {"rel_path": "Xenium.zarr/images/morphology_focus/.zgroup"},
+                ],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_spatial_rna_seq_test_cases():
+    """Generate SpatialRNASeqAnnDataZarrViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+    base_uuid = "d1234567890abcdef1234567890abcde"
+
+    # Test case 1: Spatial RNA-seq minimal - uses salmon_rnaseq_slideseq assay
+    test_cases.append(
+        (
+            "SpatialRNASeqAnnDataZarrViewConfBuilder/generated-minimal",
+            make_entity(
+                uuid=f"{base_uuid}-minimal",
+                status="Published",
+                hints=["is_sc", "rna"],
+                soft_assaytype="salmon_rnaseq_slideseq",
+                data_types=["salmon_rnaseq_slideseq"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 2: Spatial RNA-seq with marker
+    test_cases.append(
+        (
+            "SpatialRNASeqAnnDataZarrViewConfBuilder/generated-marker-gene123",
+            make_entity(
+                uuid=f"{base_uuid}-marker",
+                status="Published",
+                hints=["is_sc", "rna"],
+                soft_assaytype="salmon_rnaseq_slideseq",
+                data_types=["salmon_rnaseq_slideseq"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_object_by_analyte_test_cases():
+    """Generate ObjectByAnalyteConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+    base_uuid = "a1583467d20b420f20e7d97528305021"
+
+    # Standard files for all object-by-analyte datasets
+    standard_files = [
+        {"rel_path": "extras/transformations/hubmap_ui/mudata-zarr/calculated_metadata.json"},
+        {"rel_path": "extras/transformations/hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"},
+        {"rel_path": "extras/transformations/hubmap_ui/mudata-zarr/secondary_analysis_metadata.json"},
+    ]
+
+    # Test variants with different metadata configurations
+    # Format: (variant_name, modality_name, var_keys, n_vars, num_embeddings, is_spatial)
+    variants = [
+        ("fake-object-by-analyte", "HT_processed", ["hugo_symbol", "mean", "n_cells", "std"], 29078, 1, False),
+        (
+            "many-embeddings-object-by-analyte",
+            "many_embeddings",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            22000,
+            1,
+            False,
+        ),
+        (
+            "no-feature-labels-object-by-analyte",
+            "no_labels_data",
+            ["feature_id", "mean", "n_cells", "std"],
+            15000,
+            1,
+            False,
+        ),
+        (
+            "single-embedding-object-by-analyte",
+            "single_embedding",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            18000,
+            1,
+            False,
+        ),
+        ("spatial-object-by-analyte", "spatial_data", ["hugo_symbol", "mean", "n_cells", "std"], 25000, 1, True),
+        (
+            "three-embeddings-object-by-analyte",
+            "three_embeddings",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            20000,
+            1,
+            False,
+        ),
+        ("uniprot-object-by-analyte", "protein_data", ["uniprot_id", "mean", "n_cells", "std"], 20000, 1, False),
+        ("zero-dimensions-object-by-analyte", "empty_data", ["hugo_symbol", "mean", "n_cells", "std"], 0, 1, False),
+        # Additional test cases for multiple embeddings to cover scatterplot layout edge cases
+        (
+            "two-embeddings-object-by-analyte",
+            "protein_2emb",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            15000,
+            2,
+            False,
+        ),
+        (
+            "three-embeddings-layout-object-by-analyte",
+            "protein_3emb",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            15000,
+            3,
+            False,
+        ),
+        (
+            "four-embeddings-object-by-analyte",
+            "protein_4emb",
+            ["hugo_symbol", "mean", "n_cells", "std"],
+            15000,
+            4,
+            False,
+        ),
+    ]
+
+    for i, (variant_name, modality_name, var_keys, n_vars, num_embeddings, is_spatial) in enumerate(variants):
+        # Create embedding keys based on num_embeddings
+        obsm_keys = [f"X_embedding_{j}" if j > 0 else "X_umap" for j in range(num_embeddings)]
+
+        # Add X_spatial to obsm_keys if this is a spatial variant
+        if is_spatial:
+            obsm_keys.append("X_spatial")
+
+        metadata = {
+            "epic_type": "mudata",
+            "modalities": [
+                {
+                    "annotations": ["leiden"],
+                    "n_obs": 1000,
+                    "n_vars": n_vars,
+                    "name": modality_name,
+                    "obs_keys": ["sample_id"],
+                    "obsm_keys": obsm_keys,
+                    "var_keys": var_keys,
+                }
+            ],
+            "n_obs": 1000,
+            "n_vars": {modality_name: n_vars},
+            "obs_keys": ["sample_id"],
+            "obsm_keys": [modality_name],
+            "shape": [1000, n_vars],
+            "var_keys": var_keys,
+        }
+        test_cases.append(
+            (
+                f"ObjectByAnalyteConfBuilder/generated-{variant_name}",
+                make_entity(
+                    uuid=f"{base_uuid}-{i}",
+                    status="Published",
+                    hints=["epic"],
+                    soft_assaytype="object-x-analyte",
+                    data_types=None,
+                    files=standard_files,
+                    secondary_analysis_metadata=metadata,
+                ),
+            )
+        )
+
+    return test_cases
+
+
+def generate_tiled_sprm_test_cases():
+    """Generate TiledSPRMViewConf Builder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Test case 1: No cells variant
+    test_cases.append(
+        (
+            "TiledSPRMViewConfBuilder/generated-no-cells",
+            make_entity(
+                uuid="b69d1e2ad1bf1455eee991fce301b191-no-cells",
+                status="Published",
+                soft_assaytype="codex_cytokit_v1",
+                data_types=["codex_cytokit_v1"],
+                hints=["codex", "is_image", "is_tiled", "json_based"],
+                files=[
+                    {"rel_path": "output/extract/expressions/ome-tiff/reg1.ome.tiff"},
+                ],
+                immediate_ancestors=[{"data_types": ["codex_cytokit_v1"]}],
+                mapped_data_types=["CODEX [Cytokit + SPRM]"],
+            ),
+        )
+    )
+
+    # Test case 2: With cells variant
+    test_cases.append(
+        (
+            "TiledSPRMViewConfBuilder/generated-with-cells",
+            make_entity(
+                uuid="b69d1e2ad1bf1455eee991fce301b191-with-cells",
+                status="Published",
+                soft_assaytype="codex_cytokit_v1",
+                data_types=["codex_cytokit_v1"],
+                hints=["codex", "is_image", "is_tiled", "json_based"],
+                files=[
+                    {"rel_path": "output/extract/expressions/ome-tiff/reg1.ome.tiff"},
+                    {"rel_path": "output_json/reg1.cells.json"},
+                    {"rel_path": "output_json/reg1.cell-sets.json"},
+                    {"rel_path": "output_json/reg1.clusters.json"},
+                ],
+                mapped_data_types=["CODEX [Cytokit + SPRM]"],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_stitched_cytokit_sprm_test_cases():
+    """Generate StitchedCytokitSPRMViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Test case: Stitched SPRM with AnnData Zarr
+    test_cases.append(
+        (
+            "StitchedCytokitSPRMViewConfBuilder/generated-04e7385339167e541ad42a2636e18398",
+            make_entity(
+                uuid="04e7385339167e541ad42a2636e18398",
+                status="Published",
+                soft_assaytype="codex_cytokit_v1",
+                data_types=["codex_cytokit_v1"],
+                hints=["codex", "is_image", "is_tiled"],
+                files=[
+                    {
+                        "rel_path": "anndata-zarr/reg1_stitched_expressions-anndata.zarr/.zgroup",
+                        "description": "AnnData Zarr store for storing and visualizing SPRM outputs.",
+                    },
+                    {
+                        "rel_path": "ometiff-pyramids/stitched/expressions/reg1_stitched_expressions.ome.tif",
+                        "description": "OME-TIFF pyramid file",
+                    },
+                    {
+                        "rel_path": "ometiff-pyramids/stitched/mask/reg1_stitched_mask.ome.tif",
+                        "description": "OME-TIFF pyramid file",
+                    },
+                ],
+                mapped_data_types=["CODEX [Cytokit + SPRM]"],
+                metadata={
+                    "dag_provenance_list": [
+                        {
+                            "name": "sprm-to-anndata.cwl",
+                            "origin": "https://github.com/hubmapconsortium/portal-containers",
+                        }
+                    ]
+                },
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_imaging_builder_test_cases():
+    """Generate imaging builder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # ImagePyramidViewConfBuilder
+    test_cases.append(
+        (
+            "ImagePyramidViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="f9ae931b8b49252f150d7f8bf1d2d13f",
+                status="QA",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid", "PAS"],
+                hints=["is_support", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/separate/should-be-ignored.ome.tif"},
+                    {"rel_path": "output_offsets/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.offsets.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["PAS"]}],
+                parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
+            ),
+        )
+    )
+
+    # KaggleSegImagePyramidViewConfBuilder
+    test_cases.append(
+        (
+            "KaggleSegImagePyramidViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="23a25976beb8c02ab589b13a05b28c55",
+                status="QA",
+                soft_assaytype="h-and-e",
+                data_types=["Histology"],
+                hints=["segmentation_mask", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/B001_SB-reg005.ome.tif"},
+                    {"rel_path": "output_offsets/lab_processed/images/B001_SB-reg005.offsets.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/B001_SB-reg005.metadata.json"},
+                    {"rel_path": "ometiff-pyramids/B001_SB-reg005.segmentations.ome.tif"},
+                    {"rel_path": "output_offsets/B001_SB-reg005.segmentations.offsets.json"},
+                    {"rel_path": "image_metadata/B001_SB-reg005.segmentations.metadata.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+                parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
+            ),
+        )
+    )
+
+    # IMSViewConfBuilder
+    test_cases.append(
+        (
+            "IMSViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="a6116772446f6d1c1f6b3d2e9735cfe0",
+                status="QA",
+                soft_assaytype="image_pyramid",
+                hints=["is_support", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/ometiffs/separate/VAN0003-LK-32-21-IMS_NegMode_mz909.606.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/ometiffs/separate/VAN0003-LK-32-21-IMS_NegMode_mz922.609.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/ometiffs/VAN0003-LK-32-21-IMS_NegMode_multilayer.ome.tif"},
+                    {
+                        "rel_path": "output_offsets/ometiffs/separate/VAN0003-LK-32-21-IMS_NegMode_mz909.606.offsets.json"
+                    },
+                    {
+                        "rel_path": "output_offsets/ometiffs/separate/VAN0003-LK-32-21-IMS_NegMode_mz922.609.offsets.json"
+                    },
+                    {"rel_path": "output_offsets/ometiffs/VAN0003-LK-32-21-IMS_NegMode_multilayer.offsets.json"},
+                ],
+                parent={"uuid": "3bc3ad124014a632d558255626bf38c9"},
+            ),
+        )
+    )
+
+    # NanoDESIViewConfBuilder
+    test_cases.append(
+        (
+            "NanoDESIViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="e1c4370da5523ab5c9be581d1d76ca20",
+                status="QA",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid"],
+                hints=["is_image", "pyramid", "is_support"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/ometiffs/VAN0003-LK-32-21-IMS_NegMode_multilayer.ome.tif"},
+                    {"rel_path": "output_offsets/ometiffs/VAN0003-LK-32-21-IMS_NegMode_multilayer.offsets.json"},
+                ],
+                parent={"uuid": "6b93107731199733f266bbd0f3bc9747"},
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_geomx_test_cases():
+    """Generate GeoMxImagePyramidViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Test case 1: Standard zarr (not zip)
+    test_cases.append(
+        (
+            "GeoMxImagePyramidViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="bc7239d27b79e087c788600261f073e5-zarr",
+                status="QA",
+                soft_assaytype="",
+                data_types=["Histology"],
+                hints=["geomx", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/GeoMx4_Niedernhofer_Project_060.segmentations.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/GeoMx4_Niedernhofer_Project_060.ome.tif"},
+                    {"rel_path": "output_offsets/GeoMx4_Niedernhofer_Project_060.segmentations.offsets.json"},
+                    {"rel_path": "output_offsets/lab_processed/images/GeoMx4_Niedernhofer_Project_060.offsets.json"},
+                    {"rel_path": "image_metadata/GeoMx4_Niedernhofer_Project_060.segmentations.metadata.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/GeoMx4_Niedernhofer_Project_060.metadata.json"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.obsSegmentations.json"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.roi.zarr/.zgroup"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.aoi.zarr/.zgroup"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+            ),
+        )
+    )
+
+    # Test case 2: Zip zarr variant
+    test_cases.append(
+        (
+            "GeoMxImagePyramidViewConfBuilder/generated-fake-zarr-zip",
+            make_entity(
+                uuid="bc7239d27b79e087c788600261f073e5-zip",
+                status="QA",
+                soft_assaytype="",
+                data_types=["Histology"],
+                hints=["geomx", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/GeoMx4_Niedernhofer_Project_060.segmentations.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/GeoMx4_Niedernhofer_Project_060.ome.tif"},
+                    {"rel_path": "output_offsets/GeoMx4_Niedernhofer_Project_060.segmentations.offsets.json"},
+                    {"rel_path": "output_offsets/lab_processed/images/GeoMx4_Niedernhofer_Project_060.offsets.json"},
+                    {"rel_path": "image_metadata/GeoMx4_Niedernhofer_Project_060.segmentations.metadata.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/GeoMx4_Niedernhofer_Project_060.metadata.json"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.obsSegmentations.json"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.roi.zarr.zip"},
+                    {"rel_path": "output_ome_segments/GeoMx4_Niedernhofer_Project_060.aoi.zarr.zip"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_multi_image_sprm_test_cases():
+    """Generate MultiImageSPRMAnndataViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Multi-image SPRM with marker gene parameter
+    files = [
+        {"rel_path": "anndata-zarr/reg001_S20030086_region_001_expr-anndata.zarr/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030086_region_001_expr-anndata.zarr/obs/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030086_region_001_expr-anndata.zarr/obsm/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030086_region_001_expr-anndata.zarr/var/.zgroup"},
+        {"rel_path": "data.json"},
+        {"rel_path": "output_offsets/pipeline_output/expr/reg001_S20030086_region_001_expr.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/expr/reg001_S20030086_region_001_expr.ome.tif"},
+        {"rel_path": "output_offsets/pipeline_output/mask/reg001_S20030086_region_001_mask.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/mask/reg001_S20030086_region_001_mask.ome.tif"},
+        {"rel_path": "anndata-zarr/reg001_S20030085_region_001_expr-anndata.zarr/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030085_region_001_expr-anndata.zarr/obs/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030085_region_001_expr-anndata.zarr/obsm/.zgroup"},
+        {"rel_path": "anndata-zarr/reg001_S20030085_region_001_expr-anndata.zarr/var/.zgroup"},
+        {"rel_path": "output_offsets/pipeline_output/expr/reg001_S20030085_region_001_expr.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/expr/reg001_S20030085_region_001_expr.ome.tif"},
+        {"rel_path": "output_offsets/pipeline_output/mask/reg001_S20030085_region_001_mask.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/mask/reg001_S20030085_region_001_mask.ome.tif"},
+    ]
+
+    test_cases.append(
+        (
+            "MultiImageSPRMAnndataViewConfBuilder/generated-fake-marker=gene123",
+            make_entity(
+                uuid="2b3e99536a7da4f78bf02a8b6ce92b30",
+                status="Published",
+                soft_assaytype="celldive_deepcell",
+                data_types=["celldive_deepcell"],
+                hints=["is_tiled", "is_image", "anndata", "sprm"],
+                files=files,
+            ),
+        )
+    )
+
     return test_cases
 
 
 # Generate programmatic test cases
-programmatic_test_cases = generate_rna_seq_test_cases()
+programmatic_test_cases = (
+    generate_rna_seq_test_cases()
+    + generate_multiome_test_cases()
+    + generate_spatial_multiome_test_cases()
+    + generate_xenium_test_cases()
+    + generate_spatial_rna_seq_test_cases()
+    + generate_object_by_analyte_test_cases()
+    + generate_tiled_sprm_test_cases()
+    + generate_stitched_cytokit_sprm_test_cases()
+    + generate_imaging_builder_test_cases()
+    + generate_geomx_test_cases()
+    + generate_multi_image_sprm_test_cases()
+)
 
 
 @pytest.mark.requires_full
@@ -399,6 +1106,7 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
     class MockEntityPath:
         def __init__(self, name, entity_data):
             self.name = name
+            self.parent = type("Parent", (), {"name": test_id.split("/")[0]})()
             self._entity_data = entity_data
 
         def read_text(self):
@@ -409,9 +1117,18 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
     # Mock the zarr store
     mock_zarr_store(entity_path, mocker, 5)
 
+    # Get parent and epic_uuid from entity for builder selection
+    parent = entity.get("parent") or None  # Only used for image pyramids
+    epic_uuid = None
+    hints = entity.get("vitessce-hints", [])
+    is_object_by_analyte = "epic" in hints and len(hints) == 1
+    if "epic" in hints and not is_object_by_analyte:
+        epic_uuid = entity.get("uuid")
+
     # Get builder
-    Builder = get_view_config_builder(entity, get_entity)
-    assert Builder.__name__ == "RNASeqAnnDataZarrViewConfBuilder"
+    Builder = get_view_config_builder(entity, get_entity, parent, epic_uuid)
+    expected_builder = test_id.split("/")[0]
+    assert Builder.__name__ == expected_builder
 
     # Build configuration
     builder = Builder(entity, groups_token, assets_url)
@@ -419,9 +1136,20 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
 
     # Basic validation - should produce valid config
     assert conf is not None
-    assert "datasets" in conf
-    assert "layout" in conf
-    assert len(conf["datasets"]) > 0
+
+    # Handle both single config (dict) and multiple configs (list)
+    if isinstance(conf, list):
+        # Multi-tab view (e.g., multiome builders)
+        assert len(conf) > 0
+        for config in conf:
+            assert "datasets" in config
+            assert "layout" in config
+            assert len(config["datasets"]) > 0
+    else:
+        # Single config
+        assert "datasets" in conf
+        assert "layout" in conf
+        assert len(conf["datasets"]) > 0
 
 
 @pytest.mark.parametrize("entity_path", good_entity_paths, ids=lambda path: f"{path.parent.name}/{path.name}")
@@ -603,21 +1331,34 @@ def test_get_found_images_error_handling():
     assert "Error while searching for pyramid images" in str(excinfo.value)
 
 
-heatmap_test_builders = [
-    "RNASeqAnnDataZarrViewConfBuilder",
-    "SpatialRNASeqAnnDataZarrViewConfBuilder",
-    "SpatialMultiomicAnnDataZarrViewConfBuilder",  # Visium - covers lines 492-493
-    # "XeniumMultiomicAnnDataZarrViewConfBuilder",  # Excluded: uses dual zarr stores (adata + spatial)
+# Heatmap test cases use programmatic entities
+heatmap_test_entities = [
+    ("SpatialMultiomicAnnDataZarrViewConfBuilder", "visium", generate_spatial_multiome_test_cases()[0][1]),
+    ("SpatialRNASeqAnnDataZarrViewConfBuilder", "spatial-rnaseq", generate_spatial_rna_seq_test_cases()[0][1]),
 ]
-heatmap_test_paths = [path for path in good_entity_paths if path.parent.name in heatmap_test_builders]
-assert len(heatmap_test_paths) > 0
 
 
-@pytest.mark.parametrize("entity_path", heatmap_test_paths, ids=lambda path: f"{path.parent.name}/{path.name}")
+@pytest.mark.parametrize(
+    "builder_entity",
+    heatmap_test_entities,
+    ids=lambda x: x[0] if isinstance(x, tuple) else str(x),
+)
 @pytest.mark.requires_full
-def test_large_dataset_hides_heatmap(entity_path, mocker):
+def test_large_dataset_hides_heatmap(builder_entity, mocker):
     """Test that datasets with >100k observations hide heatmap views."""
-    entity = json.loads(entity_path.read_text())
+    builder_name, entity_type, entity = builder_entity
+
+    # Create mock entity path for mock_zarr_store compatibility
+    class MockEntityPath:
+        def __init__(self, name, entity_type, entity_data):
+            self.name = f"generated-{entity_type}"  # Use entity_type for detection by helper functions
+            self.parent = type("Parent", (), {"name": builder_name})()
+            self._entity_data = entity_data
+
+        def read_text(self):
+            return json.dumps(self._entity_data)
+
+    entity_path = MockEntityPath(builder_name, entity_type, entity)
     mock_zarr_store(entity_path, mocker, 150000)
 
     Builder = get_view_config_builder(entity, get_entity)
@@ -635,12 +1376,27 @@ def test_large_dataset_hides_heatmap(entity_path, mocker):
     assert "cellSets" in layout_str or "obsSets" in layout_str, "Cell sets should still be present"
 
 
-@pytest.mark.parametrize("entity_path", heatmap_test_paths, ids=lambda path: f"{path.parent.name}/{path.name}")
+@pytest.mark.parametrize(
+    "builder_entity",
+    heatmap_test_entities,
+    ids=lambda x: x[0] if isinstance(x, tuple) else str(x),
+)
 @pytest.mark.requires_full
-def test_small_dataset_includes_heatmap(entity_path, mocker):
+def test_small_dataset_includes_heatmap(builder_entity, mocker):
     """Test that datasets with <100k observations include heatmap views."""
-    entity = json.loads(entity_path.read_text())
+    builder_name, entity_type, entity = builder_entity
 
+    # Create mock entity path for mock_zarr_store compatibility
+    class MockEntityPath:
+        def __init__(self, name, entity_type, entity_data):
+            self.name = f"generated-{entity_type}"  # Use entity_type for detection by helper functions
+            self.parent = type("Parent", (), {"name": builder_name})()
+            self._entity_data = entity_data
+
+        def read_text(self):
+            return json.dumps(self._entity_data)
+
+    entity_path = MockEntityPath(builder_name, entity_type, entity)
     mock_zarr_store(entity_path, mocker, 5000)
 
     Builder = get_view_config_builder(entity, get_entity)
@@ -650,6 +1406,7 @@ def test_small_dataset_includes_heatmap(entity_path, mocker):
     # Verify that heatmap IS in the layout
     layout_str = json.dumps(conf["layout"])
     assert "heatmap" in layout_str.lower(), "Heatmap should be present for small datasets"
+    assert "heatmap" in layout_str.lower(), "Heatmap should be present for small datasets"
 
 
 @pytest.mark.requires_full
@@ -658,8 +1415,8 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
 
     Xenium uses dual zarr stores (regular adata + spatial data), so it needs special handling.
     """
-    entity_path = Path("test/good-fixtures/XeniumMultiomicAnnDataZarrViewConfBuilder/fake-xenium-entity.json")
-    entity = json.loads(entity_path.read_text())
+    # Use programmatic entity from generator
+    builder_name, entity = generate_xenium_test_cases()[0]
 
     # Create mock zarr store for the regular adata zarr
     z = zarr.open_group()

@@ -81,11 +81,8 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
     def n_obs(self):
         """Get the number of observations in the dataset.
 
-        >>> from pathlib import Path
-        >>> import json
         >>> import zarr
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-asct-is-annotated-published-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> entity = {'uuid': 'test', 'status': 'Published', 'vitessce-hints': ['rna', 'is_annotated'], 'soft_assaytype': 'salmon_sn_rnaseq_10x', 'data_types': ['salmon_sn_rnaseq_10x'], 'files': [{'rel_path': 'hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup'}]}
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Mock zarr store with obs index
         >>> z = zarr.open_group()
@@ -121,10 +118,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
 
         For heatmap views, also check if the dataset has too many observations for performance.
 
-        >>> from pathlib import Path
-        >>> import json
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-asct-is-annotated-published-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> entity = {'uuid': 'test', 'status': 'Published', 'vitessce-hints': ['rna', 'is_annotated'], 'soft_assaytype': 'salmon_sn_rnaseq_10x', 'data_types': ['salmon_sn_rnaseq_10x'], 'files': [{'rel_path': 'hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup'}]}
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Test with small dataset - set cached n_obs value directly on instance
         >>> builder._minimal = False
@@ -758,11 +752,17 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
     def n_obs(self):
         """Get the number of observations in the multiomics dataset.
 
-        >>> from pathlib import Path
         >>> import json
         >>> import zarr
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "MultiomicAnndataZarrViewConfBuilder" / "fake-multiome-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> # Create a simple programmatic entity
+        >>> entity = {
+        ...     "uuid": "test-uuid",
+        ...     "status": "Published",
+        ...     "vitessce-hints": ["rna", "atac", "is_sc"],
+        ...     "soft_assaytype": "multiome",
+        ...     "data_types": ["multiome"],
+        ...     "files": [{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}]
+        ... }
         >>> builder = MultiomicAnndataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Case 1: _index array exists (most common case)
         >>> z = zarr.open_group()

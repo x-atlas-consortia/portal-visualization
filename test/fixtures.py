@@ -249,7 +249,19 @@ def populate_anndata_zarr(
     # Add annotations
     if is_annotated:
         obs["predicted_label"] = zarr.array([f"celltype_{i % 3}" for i in range(obs_count)])
+        obs["predicted.ASCT.celltype"] = zarr.array([f"asct_type_{i % 3}" for i in range(obs_count)])
+        obs["predicted_CLID"] = zarr.array([f"CL:{1000000 + i % 5}" for i in range(obs_count)])
+        obs["CL_Label"] = zarr.array([f"cl_label_{i % 3}" for i in range(obs_count)])
+        obs["final_level_labels"] = zarr.array([f"final_label_{i % 3}" for i in range(obs_count)])
+        obs["full_hierarchical_labels"] = zarr.array([f"hierarchy_{i % 3}" for i in range(obs_count)])
         obs["annotation_method"] = zarr.array(["azimuth"] * obs_count)
+        obs["predicted.celltype.l1"] = zarr.array([f"az_l1_{i % 3}" for i in range(obs_count)])
+        obs["predicted.celltype.l2"] = zarr.array([f"az_l2_{i % 3}" for i in range(obs_count)])
+
+        # Add annotation metadata
+        uns = zarr_group.create_group("uns", overwrite=True)
+        ann_meta = uns.create_group("annotation_metadata", overwrite=True)
+        ann_meta["is_annotated"] = zarr.array(True)
 
     # Create var group
     var = zarr_group.create_group("var")
