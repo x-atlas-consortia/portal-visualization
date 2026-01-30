@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-import zarr
 from vitessce import (
     AnnDataWrapper,
     CoordinationType,
@@ -16,6 +15,7 @@ from vitessce import (
     FileType as ft,
 )
 
+from ..data_access import create_zarr_accessor
 from ..paths import (
     CODEX_TILE_DIR,
     IMAGE_PYRAMID_DIR,
@@ -25,7 +25,7 @@ from ..paths import (
     STITCHED_REGEX,
     TILE_REGEX,
 )
-from ..utils import create_coordination_values, get_conf_cells, get_matches, read_zip_zarr
+from ..utils import create_coordination_values, get_conf_cells, get_matches
 from .base_builders import ViewConfBuilder
 from .imaging_builders import ImagePyramidViewConfBuilder
 
@@ -166,20 +166,11 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         self._imaging_path_regex = f"{self.image_pyramid_regex}/{kwargs['imaging_path']}"
         self._mask_path_regex = f"{self.image_pyramid_regex}/{kwargs['mask_path']}"
         self._is_zarr_zip = False
+        self._zarr_accessor = create_zarr_accessor(self)
 
     def zarr_store(self):
         zarr_path = f"anndata-zarr/{self._image_name}-anndata.zarr"
-        zip_zarr_path = f"{zarr_path}.zip"
-        request_init = self._get_request_init() or {}
-        if self._is_zarr_zip:  # pragma: no cover
-            adata_url = self._build_assets_url(zip_zarr_path, use_token=True)
-            try:
-                return read_zip_zarr(adata_url, request_init)
-            except Exception as e:
-                print(f"Error opening the zip zarr file. {e}")
-        else:
-            adata_url = self._build_assets_url(zarr_path, use_token=False)
-            return zarr.open(adata_url, mode="r", storage_options={"client_kwargs": request_init})
+        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     def _get_bitmask_image_path(self):
         return f"{self._mask_path_regex}/{self._mask_name}" + r"\.ome\.tiff?"

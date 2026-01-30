@@ -11,6 +11,7 @@ from vitessce import (
 )
 from vitessce import CoordinationLevel as CL
 
+from ..data_access import ImageMetadataRetriever, create_http_resource_loader
 from ..paths import (
     IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
@@ -49,6 +50,7 @@ class EPICConfBuilder(ViewConfBuilder):
         self._epic_uuid = epic_uuid
         self._is_zarr_zip = False
         self.base_image_metadata = base_image_metadata
+        self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
 
     def get_conf_cells(self):
         self.apply()

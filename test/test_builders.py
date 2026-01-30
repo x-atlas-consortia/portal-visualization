@@ -12,6 +12,11 @@ from src.portal_visualization.builder_factory import (
     has_visualization,
 )
 
+from .fixtures import (
+    create_mock_zarr_group,
+    populate_multiome_zarr,
+)
+
 # Tests that instantiate builders and generate configs require [full] dependencies
 pytest_requires_full = pytest.mark.requires_full
 
@@ -153,25 +158,28 @@ def is_object_by_analyte_entity(entity_path):
 
 
 def mock_zarr_store(entity_path, mocker, obs_count):
-    # Need to mock zarr.open to yield correct values for different scenarios
-    z = zarr.open_group()
-    gene_array = zarr.array(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
+    """Create a mock Zarr store for testing.
+
+    Uses fixture factories for structure, but maintains backward compatibility
+    with existing test fixtures by matching the old zarr structure exactly.
+    """
+    # Determine entity configuration from filename
     is_annotated = is_annotated_entity(entity_path)
     is_multiome = is_multiome_entity(entity_path)
     is_pan_azimuth = is_pan_azimuth_entity(entity_path)
     is_visium = is_visium_entity(entity_path)
+    is_marker = is_marker_entity(entity_path)
+    is_asct = is_asct_entity(entity_path)
+    is_azimuth_labeled = is_azimuth_labeled_entity(entity_path)
 
+    # Create base Zarr group
+    z = create_mock_zarr_group()
     obs_index = [str(i) for i in range(obs_count)]
+
     if is_multiome:
-        obs = z.create_group("mod/rna/obs")
-        var = z.create_group("mod/rna/var")
-        # Add _index for observation count
-        obs["_index"] = zarr.array(obs_index)
-        group_names = ["leiden_wnn", "leiden_rna", "cluster_cbg", "cluster_cbb"]
-        if is_annotated:
-            group_names.append("predicted_label")
+        # Determine cluster names based on entity type first
         if is_pan_azimuth:
-            group_names = [
+            cluster_names = [
                 "leiden_wnn",
                 "leiden_rna",
                 "final_level_labels",
@@ -181,50 +189,92 @@ def mock_zarr_store(entity_path, mocker, obs_count):
                 "azimuth_medium",
                 "azimuth_fine",
             ]
-        groups = obs.create_groups(*group_names)
-        for group in groups:
-            group["categories"] = zarr.array(["0", "1", "2"])
+        else:
+            cluster_names = ["leiden_wnn", "leiden_rna", "cluster_cbg", "cluster_cbb"]
+            if is_annotated:
+                cluster_names.append("predicted_label")
 
-    obs = z.create_group("obs")
-    obs["_index"] = zarr.array(obs_index)
+        # Use fixture factory for multiome structure
+        modalities = ["rna"]
+        if "atac" in entity_path.name.lower():
+            modalities.append("atac")
+
+        populate_multiome_zarr(z, obs_count=obs_count, modalities=modalities)
+
+        # Add cluster groups (populate_multiome_zarr creates leiden_rna/leiden_wnn, so we need to handle carefully)
+        obs = z["mod/rna/obs"]
+        # Only create groups that don't already exist as arrays
+        existing_keys = set(obs.keys())
+        groups_to_create = [name for name in cluster_names if name not in existing_keys]
+
+        if groups_to_create:
+            groups = obs.create_groups(*groups_to_create)
+            for group in groups:
+                group["categories"] = zarr.array(["0", "1", "2"])
+
+        # Convert leiden arrays to groups with categories if they exist
+        for name in ["leiden_wnn", "leiden_rna"]:
+            if name in existing_keys and isinstance(obs[name], zarr.core.Array):
+                # Delete the array and create a group instead
+                del obs[name]
+                group = obs.create_group(name)
+                group["categories"] = zarr.array(["0", "1", "2"])
+    else:
+        # Create regular AnnData structure manually (for backward compatibility)
+        obs = z.create_group("obs")
+        obs["_index"] = zarr.array(obs_index)
+
+        # Add marker genes if needed
+        if is_marker:
+            gene_array = zarr.array(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
+            obs["marker_gene_0"] = zarr.array(obs_index)
+            obs.attrs["encoding-version"] = "0.1.0"
+
+            var = z.create_group("var")
+            var.attrs["_index"] = "index"
+            var["index"] = gene_array
+            var["hugo_symbol"] = zarr.array([0, 1, 2])
+            var["hugo_symbol"].attrs["categories"] = "hugo_categories"
+            var["hugo_categories"] = zarr.array(["gene123", "gene456", "gene789"])
+
+    # Add annotation-specific metadata
     if is_annotated:
         path = f"{'mod/rna/' if is_multiome else ''}uns/annotation_metadata/is_annotated"
         z[path] = True
-        if is_asct_entity(entity_path):
-            z["obs/predicted.ASCT.celltype"] = True  # only checked for membership in zarr group
-        elif is_azimuth_labeled_entity(entity_path):
-            z["obs/predicted_label"] = True  # only checked for membership in zarr group
+
+        if is_asct:
+            z["obs/predicted.ASCT.celltype"] = True
+        elif is_azimuth_labeled:
+            z["obs/predicted_label"] = True
             z["obs/predicted_CLID"] = True
-        elif is_pan_azimuth_entity(entity_path):
-            z["obs/azimuth_broad"] = True  # only checked for membership in zarr group
-            z["obs/azimuth_medium"] = True
-            z["obs/azimuth_fine"] = True
-            z["obs/CL_Label"] = True
-            z["obs/final_level_labels"] = True
-            z["obs/full_hierarchical_labels"] = True
-    if is_marker_entity(entity_path):
-        # Adding marker gene key to obs
-        obs["marker_gene_0"] = zarr.array(obs_index)
-        obs.attrs["encoding-version"] = "0.1.0"
-        var = z.create_group("var")
-        var.attrs["_index"] = "index"
-        var["index"] = gene_array
-        var["hugo_symbol"] = zarr.array([0, 1, 2])
-        var["hugo_symbol"].attrs["categories"] = "hugo_categories"
-        var["hugo_categories"] = zarr.array(["gene123", "gene456", "gene789"])
+        elif is_pan_azimuth:
+            # Add pan-azimuth specific obs columns
+            for col in [
+                "azimuth_broad",
+                "azimuth_medium",
+                "azimuth_fine",
+                "CL_Label",
+                "final_level_labels",
+                "full_hierarchical_labels",
+            ]:
+                z[f"obs/{col}"] = True
+
+    # Add Visium-specific metadata
     if is_visium:
         z["uns/spatial/visium/scalefactors/spot_diameter_micrometers"] = 200.0
+
+    # Mock HTTP requests for object-by-analyte entities
     if is_object_by_analyte_entity(entity_path):
         entity = json.loads(entity_path.read_text())
-        # Mock the HTTP request that would fetch the metadata
         mock_response = mocker.Mock()
         mock_response.json.return_value = entity.get("secondary_analysis_metadata")
         mock_response.raise_for_status.return_value = None
         mocker.patch("requests.get", return_value=mock_response)
+
+    # Apply mocks
     mocker.patch("zarr.open", return_value=z)
     if is_zip_entity(entity_path):
-        # Patch read_zip_zarr in the anndata_builders module where it's imported
-        mocker.patch("src.portal_visualization.builders.anndata_builders.read_zip_zarr", return_value=z)
+        mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=z)
 
 
 @pytest.mark.requires_full
@@ -508,8 +558,8 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
     # Mock zarr.open to return our mocked zarr store
     mocker.patch("zarr.open", return_value=z)
 
-    # Mock read_zip_zarr for the zip zarr file
-    mocker.patch("src.portal_visualization.builders.anndata_builders.read_zip_zarr", return_value=z)
+    # Mock read_zip_zarr in data_access module where ZarrStoreAccessor uses it
+    mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=z)
 
     Builder = get_view_config_builder(entity, get_entity)
     builder = Builder(entity, groups_token, assets_url)

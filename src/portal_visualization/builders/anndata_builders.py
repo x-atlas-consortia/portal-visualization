@@ -1,7 +1,6 @@
 from functools import cached_property
 
 import numpy as np
-import zarr
 from vitessce import (
     AnnDataWrapper,
     ImageOmeTiffWrapper,
@@ -17,7 +16,9 @@ from vitessce import CoordinationType as ct
 from vitessce import ViewType as vt
 
 from ..constants import MAX_OBS_FOR_HEATMAP, MULTIOMIC_ZARR_PATH, XENIUM_ZARR_PATH, ZARR_PATH, ZIP_ZARR_PATH
-from ..utils import get_conf_cells, obs_has_column, read_zip_zarr
+from ..data_access import create_zarr_accessor
+from ..utils import get_conf_cells, obs_has_column
+from ..view_layout import create_layout_config
 from .base_builders import ViewConfBuilder
 
 RNA_SEQ_ANNDATA_FACTOR_PATHS = [
@@ -52,20 +53,15 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         self._scatterplot_h = None
 
     @cached_property
-    def zarr_store(self):
-        request_init = self._get_request_init() or {}
-        zarr_path = ZIP_ZARR_PATH if self._is_zarr_zip else ZARR_PATH
+    def _zarr_accessor(self):
+        """Get ZarrStoreAccessor instance for this builder."""
+        return create_zarr_accessor(self)
 
-        if self._is_zarr_zip:
-            zarr_url = self._build_assets_url(zarr_path, use_token=True)
-            try:
-                return read_zip_zarr(zarr_url, request_init)
-            except Exception as e:  # pragma: no cover
-                print(f"Error opening the zip zarr file. {e}")
-                return None
-        else:
-            zarr_url = self._build_assets_url(zarr_path, use_token=False)
-            return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": request_init})
+    @cached_property
+    def zarr_store(self):
+        """Open the Zarr store using ZarrStoreAccessor."""
+        zarr_path = ZIP_ZARR_PATH if self._is_zarr_zip else ZARR_PATH
+        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     @cached_property
     def has_marker_genes(self):
@@ -347,34 +343,30 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
             )
         )
 
-        # Handle layout for variants in one unified place
-        if self._minimal:
-            if self._is_spatial:
-                scatterplot.set_xywh(x=0, y=0, w=6, h=6)
-                spatial.set_xywh(x=0, y=6, w=6, h=6)
-                cell_sets.set_xywh(x=6, y=0, w=6, h=4)
-                cell_sets_expr.set_xywh(x=6, y=4, w=6, h=8)
-                self._views = [scatterplot, spatial, cell_sets_expr]
-            else:
-                scatterplot.set_xywh(x=0, y=0, w=6, h=12)
-                cell_sets.set_xywh(x=6, y=0, w=6, h=4)
-                cell_sets_expr.set_xywh(x=6, y=4, w=6, h=8)
+        # Apply layout configuration
+        layout_config = create_layout_config(
+            minimal=self._minimal, is_spatial=self._is_spatial, include_heatmap=(heatmap is not None)
+        )
 
-                self._views = [scatterplot, cell_sets_expr]
+        if self._minimal:
+            views_dict = {
+                "scatterplot": scatterplot,
+                "spatial": spatial,
+                "cell_sets": cell_sets,
+                "cell_sets_expr": cell_sets_expr,
+            }
+            self._views = layout_config.apply_minimal_layout(views_dict)
         else:
-            if self._is_spatial:
-                if heatmap is not None:
-                    vc.layout(((scatterplot | spatial) / heatmap) | ((cell_sets | gene_list) / cell_sets_expr))
-                else:
-                    # When heatmap is hidden, expand scatterplot/spatial vertically to fill the space
-                    vc.layout((scatterplot | spatial) | ((cell_sets | gene_list) / cell_sets_expr))
-            else:
-                if heatmap is not None:
-                    vc.layout((scatterplot / heatmap) | ((cell_sets | gene_list) / cell_sets_expr))
-                else:
-                    # When heatmap is hidden, expand scatterplot vertically to fill the space
-                    vc.layout(scatterplot | ((cell_sets | gene_list) / cell_sets_expr))
-                    scatterplot.set_xywh(x=0, y=0, w=6, h=12)
+            views_dict = {
+                "scatterplot": scatterplot,
+                "spatial": spatial,
+                "heatmap": heatmap,
+                "cell_sets": cell_sets,
+                "gene_list": gene_list,
+                "cell_sets_expr": cell_sets_expr,
+            }
+            layout_config.apply_full_layout(vc, views_dict)
+
             # Adjust the cell sets and gene list to not be as tall,
             # give cell sets expression more height
             cell_sets.set_xywh(x=6, y=0, w=3, h=4)
@@ -734,11 +726,15 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         self._scatterplot_w = 3
 
     @cached_property
+    def _zarr_accessor(self):
+        """Get ZarrStoreAccessor instance for this builder."""
+        return create_zarr_accessor(self)
+
+    @cached_property
     def zarr_store(self):
+        """Open the Zarr store using ZarrStoreAccessor."""
         zarr_path = f"{MULTIOMIC_ZARR_PATH}.zip" if self._is_zarr_zip else MULTIOMIC_ZARR_PATH
-        request_init = self._get_request_init() or {}
-        adata_url = self._build_assets_url(zarr_path, use_token=False)
-        return zarr.open(adata_url, mode="r", storage_options={"client_kwargs": request_init})
+        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     @cached_property
     def has_marker_genes(self):
