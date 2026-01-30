@@ -94,35 +94,31 @@ excluded_fixtures = {
     "with-cells-entity.json",
     # StitchedCytokitSPRMViewConfBuilder
     "04e7385339167e541ad42a2636e18398-entity.json",
-    # MultiImageSPRMAnndataViewConfBuilder
-    "fake-marker=gene123-entity.json",
+    # ImagePyramidViewConfBuilder, KaggleSegImagePyramidViewConfBuilder,
+    # ImsImagePyramidViewConfBuilder, NanoDESIImagePyramidViewConfBuilder,
+    # MultiImageSPRMViewConfBuilder, ATACSeqViewConfBuilder, RNASeqViewConfBuilder,
+    # SeqFISHViewConfBuilder, EpicSegImagePyramidViewConfBuilder - all use "fake-entity.json"
+    "fake-entity.json",
+    # ImagePyramidViewConfBuilder (unique UUID)
+    "3bc3ad12-entity.json",
     # GeoMxImagePyramidViewConfBuilder
+    "bc7239d27b79e087c788600261f073e5-entity.json",
+    "bc7239d27b79e087c788600261f073e5-zarr-zip-entity.json",
+    # EpicSegImagePyramidViewConfBuilder (SegmentationMaskBuilder)
     "fake-zarr-zip-entity.json",
+    # NullViewConfBuilder (now programmatic)
+    "empty-entity.json",
+    "fake-no-support-entity.json",
 }
+good_entity_paths = [p for p in good_entity_paths if p.name not in excluded_fixtures]
 
-# Builders that have been completely migrated to programmatic tests
-excluded_builders = {
-    "ImagePyramidViewConfBuilder",
-    "KaggleSegImagePyramidViewConfBuilder",
-    "IMSViewConfBuilder",
-    "NanoDESIViewConfBuilder",
-}
-
-good_entity_paths = [
-    p for p in good_entity_paths if p.name not in excluded_fixtures and p.parent.name not in excluded_builders
-]
-
-assert len(good_entity_paths) > 0
-
-image_pyramids = [
-    "SeqFISHViewConfBuilder",
-]
-
-image_pyramid_paths = [path for path in good_entity_paths if path.parent.name in image_pyramids]
-assert len(image_pyramid_paths) > 0
+# Note: All good entity fixtures have been migrated to programmatic tests
+# This list is now empty but kept for backward compatibility
 
 bad_entity_paths = list((Path(__file__).parent / "bad-fixtures").glob("*-entity.json"))
-assert len(bad_entity_paths) > 0
+
+# Note: Bad entity fixtures serve as important documentation for error cases
+# We keep them as regression tests alongside programmatic error tests
 
 assaytypes_path = Path(__file__).parent / "assaytype-fixtures"
 assert assaytypes_path.is_dir()
@@ -174,7 +170,11 @@ def test_has_visualization(has_vis_entity):
 
 
 def is_annotated_entity(entity_path):
-    return "is-annotated" in entity_path.name
+    # Check for various annotated patterns
+    # - "is-annotated" from old fixture files
+    # - "asct-annotated", "predicted-label-annotated", "pan-az-annotated" from programmatic tests
+    name = entity_path.name
+    return "is-annotated" in name or ("annotated" in name and "not-annotated" not in name)
 
 
 def is_multiome_entity(entity_path):
@@ -311,10 +311,14 @@ def mock_zarr_store(entity_path, mocker, obs_count):
         elif is_azimuth_labeled:
             obs_group["predicted_label"] = zarr.array([f"celltype_{i % 3}" for i in range(obs_count)])
             obs_group["predicted_CLID"] = zarr.array([f"CL:{1000000 + i % 3}" for i in range(obs_count)])
-        elif is_pan_azimuth:
-            # For pan-azimuth, azimuth columns were already created in the multiome logic above
-            # We don't need to create them again, they already have categories
-            pass
+        elif is_pan_azimuth and not is_multiome:
+            # For non-multiome pan-azimuth, we need to create azimuth columns
+            azimuth_cols = ["azimuth_broad", "azimuth_medium", "azimuth_fine"]
+            for col in azimuth_cols:
+                # Create as group with categories (multiome already has these)
+                group = obs_group.create_group(col)
+                group["categories"] = zarr.array(["type_a", "type_b", "type_c"])
+            # For multiome pan-azimuth, azimuth columns were already created in the multiome logic above
 
     # Add Visium-specific metadata
     if is_visium:
@@ -472,6 +476,21 @@ def generate_rna_seq_test_cases():
             make_rna_seq_entity(
                 uuid=f"{base_uuid}-pan-az",
                 is_annotated=True,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 9: Marker gene test to cover line 389
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-marker=gene123",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-marker",
+                is_annotated=False,
                 is_published=True,
                 soft_assaytype="salmon_sn_rnaseq_10x",
                 data_types=["salmon_sn_rnaseq_10x"],
@@ -1056,6 +1075,235 @@ def generate_multi_image_sprm_test_cases():
     return test_cases
 
 
+def generate_legacy_json_test_cases():
+    """Generate legacy JSON-based builder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # ATACSeqViewConfBuilder
+    test_cases.append(
+        (
+            "ATACSeqViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="fake-atac-seq-uuid",
+                status="QA",
+                soft_assaytype="sn_atac_seq",
+                data_types=["sn_atac_seq"],
+                hints=["is_sc", "atac", "json_based"],
+                files=[
+                    {"rel_path": "output/umap_coords_clusters.cells.json"},
+                    {"rel_path": "output/umap_coords_clusters.cell-sets.json"},
+                ],
+            ),
+        )
+    )
+
+    # RNASeqViewConfBuilder
+    test_cases.append(
+        (
+            "RNASeqViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="c019a1cd35aab4d2b4a6ff221e92aaab",
+                status="Published",
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_rnaseq_10x"],
+                hints=["is_sc", "rna", "json_based"],
+                files=[
+                    {"rel_path": "cluster-marker-genes/output/cluster_marker_genes.cells.json"},
+                    {"rel_path": "cluster-marker-genes/output/cluster_marker_genes.cell-sets.json"},
+                ],
+                mapped_data_types=[],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_seqfish_test_cases():
+    """Generate SeqFISHViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # SeqFISH image pyramid
+    test_cases.append(
+        (
+            "SeqFISHViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="9db61adfc017670a196ea9b3ca1852a0",
+                status="QA",
+                soft_assaytype="seqFish",
+                data_types=["image_pyramid", "seqFish"],
+                hints=["is_image", "pyramid", "is_support"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/final_mRNA_background/MMStack_Pos12.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/final_mRNA_background/MMStack_Pos13.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/HybCycle_12/MMStack_Pos12.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/HybCycle_12/MMStack_Pos13.ome.tif"},
+                    {"rel_path": "output_offsets/final_mRNA_background/MMStack_Pos12.offsets.json"},
+                    {"rel_path": "output_offsets/final_mRNA_background/MMStack_Pos13.offsets.json"},
+                    {"rel_path": "output_offsets/HybCycle_12/MMStack_Pos12.offsets.json"},
+                    {"rel_path": "output_offsets/HybCycle_12/MMStack_Pos13.offsets.json"},
+                ],
+                parent={"uuid": "c6a254b2dc2ed46b002500ade163a7cc"},
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_epic_seg_test_cases():
+    """Generate EpicSegImagePyramidViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Standard zarr variant
+    test_cases.append(
+        (
+            "EpicSegImagePyramidViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="df7cac7cb67a822f7007b57c4d8f5e7d",
+                status="QA",
+                soft_assaytype="PAS",
+                data_types=["image_pyramid", "PAS"],
+                hints=["segmentation_mask", "is_image", "pyramid", "epic"],
+                files=[
+                    {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/91706.ome.tif"},
+                    {"rel_path": "extras/transformations/output_offsets/lab_processed/images/91706.offsets.json"},
+                    {"rel_path": "extras/transformations/image_metadata/lab_processed/images/91706.metadata.json"},
+                    {"rel_path": "extras/transformations/ometiff-pyramids/91706.segmentations.ome.tif"},
+                    {"rel_path": "extras/transformations/output_offsets/91706.segmentations.offsets.json"},
+                    {"rel_path": "extras/transformations/image_metadata/91706.segmentations.metadata.json"},
+                    {
+                        "rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr/arteries-arterioles.zarr/.zgroup"
+                    },
+                    {
+                        "rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr/tubules.zarr/.zgroup"
+                    },
+                    {
+                        "rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr/glomeruli.zarr/.zgroup"
+                    },
+                    {"rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr/metadata.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["PAS"]}],
+                parent={"uuid": "22901da5f080b219a514e38381acbb0e"},
+            ),
+        )
+    )
+
+    # Zarr.zip variant
+    test_cases.append(
+        (
+            "EpicSegImagePyramidViewConfBuilder/generated-fake-zarr-zip",
+            make_entity(
+                uuid="df7cac7cb67a822f7007b57c4d8f5e7d-zip",
+                status="QA",
+                soft_assaytype="PAS",
+                data_types=["image_pyramid", "PAS"],
+                hints=["segmentation_mask", "is_image", "pyramid", "epic"],
+                files=[
+                    {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/91706.ome.tif"},
+                    {"rel_path": "extras/transformations/output_offsets/lab_processed/images/91706.offsets.json"},
+                    {"rel_path": "extras/transformations/image_metadata/lab_processed/images/91706.metadata.json"},
+                    {"rel_path": "extras/transformations/ometiff-pyramids/91706.segmentations.ome.tif"},
+                    {"rel_path": "extras/transformations/output_offsets/91706.segmentations.offsets.json"},
+                    {"rel_path": "extras/transformations/image_metadata/91706.segmentations.metadata.json"},
+                    {"rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr.zip"},
+                ],
+                immediate_ancestors=[{"data_types": ["PAS"]}],
+                parent={"uuid": "22901da5f080b219a514e38381acbb0e"},
+            ),
+        )
+    )
+
+    return test_cases
+
+
+def generate_null_builder_test_cases():
+    """Generate NullViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Empty entity (no data types, no hints)
+    test_cases.append(
+        (
+            "NullViewConfBuilder/generated-empty",
+            make_entity(
+                uuid="2c2179ea741d3bbb47772172a316a2bf",
+                soft_assaytype="bulk-RNA",
+                data_types=[],
+                hints=[],
+            ),
+        )
+    )
+
+    # No visualization support (is_support without parent)
+    test_cases.append(
+        (
+            "NullViewConfBuilder/generated-fake-no-support",
+            make_entity(
+                uuid="f9ae931b8b49252f150d7f8bf1d2d13f-bad",
+                status="QA",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid", "PAS"],
+                hints=["is_support", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/separate/should-be-ignored.ome.tif"},
+                    {"rel_path": "output_offsets/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.offsets.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["PAS"]}],
+                # Note: no parent, which causes NullViewConfBuilder selection
+            ),
+        )
+    )
+
+    # Image pyramid without is_support and without parent
+    test_cases.append(
+        (
+            "NullViewConfBuilder/generated-image-pyramid-no-parent",
+            make_entity(
+                uuid="a3b4c5d6e7f890123456789012345678",
+                status="Published",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid", "PAS"],
+                hints=["pyramid", "is_image"],  # Note: NO is_support hint
+                files=[
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/sample.ome.tif"},
+                    {"rel_path": "output_offsets/lab_processed/images/sample.offsets.json"},
+                ],
+                # Note: no parent, which causes NullViewConfBuilder selection
+            ),
+        )
+    )
+
+    # Image pyramid with parent but no special hints (covers builder_factory line 237)
+    test_cases.append(
+        (
+            "NullViewConfBuilder/generated-image-pyramid-with-parent-no-hints",
+            make_entity(
+                uuid="b4c5d6e7f890123456789012345678ab",
+                status="Published",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid"],
+                hints=["pyramid", "is_image"],  # has parent but NOT seg_mask, NOT is_support
+                files=[
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/sample2.ome.tif"},
+                    {"rel_path": "output_offsets/lab_processed/images/sample2.offsets.json"},
+                ],
+                parent={"uuid": "parent123456789"},  # Has parent but not the right hints
+            ),
+        )
+    )
+
+    return test_cases
+
+
 # Generate programmatic test cases
 programmatic_test_cases = (
     generate_rna_seq_test_cases()
@@ -1069,6 +1317,10 @@ programmatic_test_cases = (
     + generate_imaging_builder_test_cases()
     + generate_geomx_test_cases()
     + generate_multi_image_sprm_test_cases()
+    + generate_legacy_json_test_cases()
+    + generate_seqfish_test_cases()
+    + generate_epic_seg_test_cases()
+    + generate_null_builder_test_cases()
 )
 
 
@@ -1130,9 +1382,56 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
     expected_builder = test_id.split("/")[0]
     assert Builder.__name__ == expected_builder
 
+    # Extract marker from test_id if present (e.g., "...-marker=gene123")
+    marker = None
+    if "marker=" in test_id:
+        # Extract marker value from test_id format like "...-marker=gene123"
+        marker_part = [part for part in test_id.split("-") if part.startswith("marker=")]
+        if marker_part:
+            marker = marker_part[0].split("=")[1]
+
+    # Extract minimal from test_id if present
+    minimal = "minimal" in test_id
+
     # Build configuration
-    builder = Builder(entity, groups_token, assets_url)
-    conf, cells = builder.get_conf_cells()
+    builder = Builder(entity, groups_token, assets_url, minimal=minimal)
+    conf, cells = builder.get_conf_cells(marker=marker)
+
+    # Special case: NullViewConfBuilder returns None
+    if expected_builder == "NullViewConfBuilder":
+        assert conf is None
+        return
+
+    # Handle EPIC builders (segmentation masks, etc.)
+    hints = entity.get("vitessce-hints", [])
+    is_object_by_analyte = "epic" in hints and len(hints) == 1
+    if "epic" in hints and not is_object_by_analyte:
+        from src.portal_visualization.epic_factory import get_epic_builder
+
+        epic_builder = get_epic_builder(epic_uuid)
+        assert epic_builder is not None
+        if conf is None:  # pragma: no cover
+            with pytest.raises(ValueError):  # noqa: PT011
+                epic_builder(
+                    epic_uuid,
+                    ConfCells(conf, cells),
+                    entity,
+                    groups_token,
+                    assets_url,
+                    builder.base_image_metadata,  # type: ignore
+                ).get_conf_cells()
+            return
+
+        built_epic_conf, cells = epic_builder(
+            epic_uuid,
+            ConfCells(conf, cells),
+            entity,
+            groups_token,
+            assets_url,
+            builder.base_image_metadata,  # type: ignore
+        ).get_conf_cells()
+        assert built_epic_conf is not None
+        conf = built_epic_conf
 
     # Basic validation - should produce valid config
     assert conf is not None
@@ -1260,14 +1559,29 @@ def compare_confs(entity_path, conf, cells):
 
 @pytest.fixture
 def mock_seg_image_pyramid_builder():
+    from .fixtures import make_entity
+
     class MockBuilder(KaggleSegImagePyramidViewConfBuilder):
         def _get_file_paths(self):
             return []
 
-    entity = json.loads(
-        next(
-            (Path(__file__).parent / "good-fixtures").glob("KaggleSegImagePyramidViewConfBuilder/*-entity.json")
-        ).read_text()
+    # Use programmatic entity generation instead of loading from file
+    entity = make_entity(
+        uuid="23a25976beb8c02ab589b13a05b28c55",
+        status="QA",
+        soft_assaytype="h-and-e",
+        data_types=["Histology"],
+        hints=["segmentation_mask", "pyramid", "is_image"],
+        files=[
+            {"rel_path": "ometiff-pyramids/lab_processed/images/B001_SB-reg005.ome.tif"},
+            {"rel_path": "output_offsets/lab_processed/images/B001_SB-reg005.offsets.json"},
+            {"rel_path": "image_metadata/lab_processed/images/B001_SB-reg005.metadata.json"},
+            {"rel_path": "ometiff-pyramids/B001_SB-reg005.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/B001_SB-reg005.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/B001_SB-reg005.segmentations.metadata.json"},
+        ],
+        immediate_ancestors=[{"data_types": ["Histology"]}],
+        parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
     )
     return MockBuilder(entity, groups_token, assets_url)
 
