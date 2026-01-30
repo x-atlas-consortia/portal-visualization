@@ -14,6 +14,7 @@ from src.portal_visualization.builder_factory import (
 
 from .fixtures import (
     create_mock_zarr_group,
+    make_rna_seq_entity,
     populate_multiome_zarr,
 )
 
@@ -54,6 +55,14 @@ class MockResponse:
 
 
 good_entity_paths = list((Path(__file__).parent / "good-fixtures").glob("*/*-entity.json"))
+
+# Exclude fixtures that have been replaced by programmatic tests
+excluded_fixtures = {
+    "RNASeqAnnDataZarrViewConfBuilder/fake-is-not-annotated-published-entity.json",
+    "RNASeqAnnDataZarrViewConfBuilder/fake-is-not-annotated-qa-entity.json",
+}
+good_entity_paths = [p for p in good_entity_paths if p.name not in excluded_fixtures]
+
 assert len(good_entity_paths) > 0
 
 image_pyramids = [
@@ -277,6 +286,85 @@ def mock_zarr_store(entity_path, mocker, obs_count):
         mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=z)
 
 
+# Programmatic test configurations to replace JSON fixtures
+# These can be used instead of loading from good-fixtures/
+
+
+def generate_rna_seq_test_cases():
+    """Generate RNASeqAnnDataZarrViewConfBuilder test cases programmatically."""
+    test_cases = []
+
+    # Base UUID for RNA-seq tests
+    base_uuid = "e65175561b4b17da5352e3837aa0e497"
+
+    # Test case 1: Not annotated, published
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-not-annotated-published",
+            make_rna_seq_entity(
+                uuid=base_uuid,
+                is_annotated=False,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 2: Not annotated, QA
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-not-annotated-qa",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-qa",
+                is_annotated=False,
+                is_published=False,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 3: ASCT annotated, published
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-asct-annotated-published",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-asct",
+                is_annotated=True,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup"}],
+                vitessce_hints=["rna", "is_annotated", "is_sc"],  # Override to add is_sc
+            ),
+        )
+    )
+
+    # Test case 4: Zip compressed
+    test_cases.append(
+        (
+            "RNASeqAnnDataZarrViewConfBuilder/generated-asct-annotated-zip",
+            make_rna_seq_entity(
+                uuid=f"{base_uuid}-zip",
+                is_annotated=True,
+                is_published=True,
+                soft_assaytype="salmon_sn_rnaseq_10x",
+                data_types=["salmon_sn_rnaseq_10x"],
+                files=[{"rel_path": "hubmap_ui/anndata-zarr/secondary_analysis.zarr.zip"}],
+            ),
+        )
+    )
+
+    return test_cases
+
+
+# Generate programmatic test cases
+programmatic_test_cases = generate_rna_seq_test_cases()
+
+
 @pytest.mark.requires_full
 def test_read_zip_zarr_opens_store(mocker):
     # Mock the fsspec filesystem and zarr open
@@ -296,6 +384,44 @@ def test_read_zip_zarr_opens_store(mocker):
 
     assert result == mock_zarr_obj
     mock_fs.get_mapper.assert_called_once_with("")
+
+
+@pytest.mark.parametrize(
+    ("test_id", "entity"),
+    programmatic_test_cases,
+    ids=lambda tc: tc[0] if isinstance(tc, tuple) else str(tc),
+)
+@pytest.mark.requires_full
+def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
+    """Test builder with programmatically generated entities (no JSON fixtures)."""
+
+    # Create a mock entity_path-like object for compatibility with mock_zarr_store
+    class MockEntityPath:
+        def __init__(self, name, entity_data):
+            self.name = name
+            self._entity_data = entity_data
+
+        def read_text(self):
+            return json.dumps(self._entity_data)
+
+    entity_path = MockEntityPath(test_id, entity)
+
+    # Mock the zarr store
+    mock_zarr_store(entity_path, mocker, 5)
+
+    # Get builder
+    Builder = get_view_config_builder(entity, get_entity)
+    assert Builder.__name__ == "RNASeqAnnDataZarrViewConfBuilder"
+
+    # Build configuration
+    builder = Builder(entity, groups_token, assets_url)
+    conf, cells = builder.get_conf_cells()
+
+    # Basic validation - should produce valid config
+    assert conf is not None
+    assert "datasets" in conf
+    assert "layout" in conf
+    assert len(conf["datasets"]) > 0
 
 
 @pytest.mark.parametrize("entity_path", good_entity_paths, ids=lambda path: f"{path.parent.name}/{path.name}")

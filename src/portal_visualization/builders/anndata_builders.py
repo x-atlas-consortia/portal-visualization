@@ -84,7 +84,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         >>> from pathlib import Path
         >>> import json
         >>> import zarr
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-is-not-annotated-published-entity.json"
+        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-asct-is-annotated-published-entity.json"
         >>> entity = json.loads(fixture_path.read_text())
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Mock zarr store with obs index
@@ -123,7 +123,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
 
         >>> from pathlib import Path
         >>> import json
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-is-not-annotated-published-entity.json"
+        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-asct-is-annotated-published-entity.json"
         >>> entity = json.loads(fixture_path.read_text())
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Test with small dataset - set cached n_obs value directly on instance
