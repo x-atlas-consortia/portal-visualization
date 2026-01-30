@@ -305,7 +305,19 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     has_parent = parent is not None
     has_epic = epic_uuid is not None
 
-    builder_name = registry.find_builder(hints=hints, assay_type=assay_type, has_parent=has_parent, has_epic=has_epic)
+    # Get parent assay type if parent exists
+    parent_assay_type = None
+    if parent is not None and get_entity is not None:
+        parent_entity = get_entity(parent)
+        parent_assay_type = parent_entity.get("soft_assaytype")
+
+    builder_name = registry.find_builder(
+        hints=hints,
+        assay_type=assay_type,
+        has_parent=has_parent,
+        has_epic=has_epic,
+        parent_assay_type=parent_assay_type,
+    )
 
     if builder_name is None:  # pragma: no cover
         # Fallback to NullViewConfBuilder if no match found

@@ -95,9 +95,21 @@ class TestRegistryExperimental:
             priority=5,
         )
         # Line 74: Return False when parent required but not provided
-        assert reg.matches(["is_image"], None, False, False) is False
+        assert reg.matches(["is_image"], None, False, False, None) is False
         # Should match when parent provided
-        assert reg.matches(["is_image"], None, True, False) is True
+        assert reg.matches(["is_image"], None, True, False, None) is True
+
+        # Test parent_assay_types check (line 84)
+        reg = BuilderRegistration(
+            builder_name="TestBuilder",
+            required_hints={"is_image"},
+            parent_assay_types={"SEQFISH"},
+            priority=5,
+        )
+        # Line 84: Return False when parent_assay_type doesn't match
+        assert reg.matches(["is_image"], None, True, False, "wrong_type") is False
+        # Should match when correct parent assay type
+        assert reg.matches(["is_image"], None, True, False, "SEQFISH") is True
 
     def test_find_builder_returns_none_when_no_match(self):
         """Test BuilderRegistry.find_builder returns None when no matches."""
@@ -107,5 +119,39 @@ class TestRegistryExperimental:
         registry.register("OnlyForCodex", required_hints=["is_image"], assay_types={"CODEX"})
 
         # Line 159: Return None when no matches
-        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY", False, False)
+        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY", False, False, None)
         assert result is None
+
+    def test_registry_parent_assay_type_fetching(self):
+        """Test that _get_builder_name_from_registry fetches parent assay type."""
+        from portal_visualization.assays import SEQFISH
+        from portal_visualization.builder_factory import _get_builder_name_from_registry
+
+        # Create parent entity with SEQFISH assay type
+        parent_entity = {
+            "uuid": "parent-uuid",
+            "soft_assaytype": SEQFISH,
+        }
+
+        # Create support entity (image pyramid)
+        support_entity = {
+            "uuid": "support-uuid",
+            "vitessce-hints": ["is_support", "is_image"],
+        }
+
+        # Mock get_entity to return parent
+        def mock_get_entity(uuid):
+            if uuid == "parent-uuid":
+                return parent_entity
+            return support_entity
+
+        # Lines 311-312: Should fetch parent entity and extract soft_assaytype
+        builder_name = _get_builder_name_from_registry(
+            support_entity,
+            mock_get_entity,
+            "parent-uuid",  # parent UUID
+            None,
+        )
+
+        # Should match SeqFISHViewConfBuilder based on parent assay type
+        assert builder_name == "SeqFISHViewConfBuilder"

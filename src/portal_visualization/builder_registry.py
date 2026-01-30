@@ -18,6 +18,7 @@ class BuilderRegistration:
         required_hints: Hints that must be present (e.g., ['is_image', 'rna'])
         forbidden_hints: Hints that must NOT be present (e.g., ['is_json'])
         assay_types: Specific assay types this builder handles (None = any)
+        parent_assay_types: Parent assay types this builder handles (None = any)
         priority: Selection priority when multiple builders match (higher = preferred)
         requires_parent: Whether this builder requires a parent entity
         requires_epic: Whether this builder requires an EPIC UUID
@@ -27,11 +28,19 @@ class BuilderRegistration:
     required_hints: set[str] = field(default_factory=set)
     forbidden_hints: set[str] = field(default_factory=set)
     assay_types: set[str] | None = None
+    parent_assay_types: set[str] | None = None
     priority: int = 0
     requires_parent: bool = False
     requires_epic: bool = False
 
-    def matches(self, hints: list[str], assay_type: str | None, has_parent: bool, has_epic: bool) -> bool:
+    def matches(
+        self,
+        hints: list[str],
+        assay_type: str | None,
+        has_parent: bool,
+        has_epic: bool,
+        parent_assay_type: str | None = None,
+    ) -> bool:
         """Check if this builder matches the given criteria.
 
         Args:
@@ -39,6 +48,7 @@ class BuilderRegistration:
             assay_type: Assay type from entity
             has_parent: Whether a parent UUID was provided
             has_epic: Whether an EPIC UUID was provided
+            parent_assay_type: Assay type of the parent entity (if has_parent)
 
         Returns:
             True if this builder should be used
@@ -67,6 +77,10 @@ class BuilderRegistration:
 
         # Check assay type if specified
         if self.assay_types is not None and assay_type not in self.assay_types:
+            return False
+
+        # Check parent assay type if specified
+        if self.parent_assay_types is not None and parent_assay_type not in self.parent_assay_types:
             return False
 
         # Check parent/epic requirements
@@ -102,6 +116,7 @@ class BuilderRegistry:
         required_hints: list[str] | None = None,
         forbidden_hints: list[str] | None = None,
         assay_types: list[str] | None = None,
+        parent_assay_types: list[str] | None = None,
         priority: int = 0,
         requires_parent: bool = False,
         requires_epic: bool = False,
@@ -113,6 +128,7 @@ class BuilderRegistry:
             required_hints: Hints that must be present
             forbidden_hints: Hints that must NOT be present
             assay_types: Specific assay types this builder handles
+            parent_assay_types: Parent assay types this builder handles
             priority: Selection priority (higher wins)
             requires_parent: Whether builder needs parent entity
             requires_epic: Whether builder needs EPIC UUID
@@ -127,6 +143,7 @@ class BuilderRegistry:
             required_hints=set(required_hints or []),
             forbidden_hints=set(forbidden_hints or []),
             assay_types=set(assay_types) if assay_types else None,
+            parent_assay_types=set(parent_assay_types) if parent_assay_types else None,
             priority=priority,
             requires_parent=requires_parent,
             requires_epic=requires_epic,
@@ -134,7 +151,12 @@ class BuilderRegistry:
         self._registrations.append(registration)
 
     def find_builder(
-        self, hints: list[str], assay_type: str | None, has_parent: bool = False, has_epic: bool = False
+        self,
+        hints: list[str],
+        assay_type: str | None,
+        has_parent: bool = False,
+        has_epic: bool = False,
+        parent_assay_type: str | None = None,
     ) -> str | None:
         """Find the best matching builder for the given criteria.
 
@@ -143,6 +165,7 @@ class BuilderRegistry:
             assay_type: Assay type string
             has_parent: Whether parent UUID is available
             has_epic: Whether EPIC UUID is available
+            parent_assay_type: Assay type of parent entity (if has_parent)
 
         Returns:
             Builder name or None if no match
@@ -153,7 +176,11 @@ class BuilderRegistry:
         >>> registry.find_builder(["is_image"], None)
         'HighPriority'
         """
-        matching = [reg for reg in self._registrations if reg.matches(hints, assay_type, has_parent, has_epic)]
+        matching = [
+            reg
+            for reg in self._registrations
+            if reg.matches(hints, assay_type, has_parent, has_epic, parent_assay_type)
+        ]
 
         if not matching:
             return None
@@ -185,6 +212,7 @@ def register_builder(
     required_hints: list[str] | None = None,
     forbidden_hints: list[str] | None = None,
     assay_types: list[str] | None = None,
+    parent_assay_types: list[str] | None = None,
     priority: int = 0,
     requires_parent: bool = False,
     requires_epic: bool = False,
@@ -205,6 +233,7 @@ def register_builder(
         required_hints: Hints that must be present
         forbidden_hints: Hints that must NOT be present
         assay_types: Specific assay types this builder handles
+        parent_assay_types: Parent assay types this builder handles
         priority: Selection priority (higher wins)
         requires_parent: Whether builder needs parent entity
         requires_epic: Whether builder needs EPIC UUID
@@ -219,6 +248,7 @@ def register_builder(
             required_hints=required_hints,
             forbidden_hints=forbidden_hints,
             assay_types=assay_types,
+            parent_assay_types=parent_assay_types,
             priority=priority,
             requires_parent=requires_parent,
             requires_epic=requires_epic,
@@ -351,13 +381,47 @@ def populate_legacy_registry():
 
     _REGISTRY.register("RNASeqViewConfBuilder", required_hints=["is_sc"], priority=PRIORITY_FALLBACK + 3)
 
-    # IMS imaging
+    # Support image pyramids with parent-specific builders (requires parent, uses parent assay type)
+    # These have higher priority than the generic image pyramid builder
+    _REGISTRY.register(
+        "SeqFISHViewConfBuilder",
+        required_hints=["is_support", "is_image"],
+        parent_assay_types=[SEQFISH],
+        requires_parent=True,
+        priority=PRIORITY_FALLBACK + 10,
+    )
+
+    _REGISTRY.register(
+        "IMSViewConfBuilder",
+        required_hints=["is_support", "is_image"],
+        parent_assay_types=[MALDI_IMS],
+        requires_parent=True,
+        priority=PRIORITY_FALLBACK + 10,
+    )
+
+    _REGISTRY.register(
+        "NanoDESIViewConfBuilder",
+        required_hints=["is_support", "is_image"],
+        parent_assay_types=[NANODESI],
+        requires_parent=True,
+        priority=PRIORITY_FALLBACK + 10,
+    )
+
+    # Generic support image pyramid (fallback when parent assay type doesn't match specific builders)
+    _REGISTRY.register(
+        "ImagePyramidViewConfBuilder",
+        required_hints=["is_support", "is_image"],
+        requires_parent=True,
+        priority=PRIORITY_FALLBACK + 8,
+    )
+
+    # IMS imaging (direct, not support)
     _REGISTRY.register("IMSViewConfBuilder", assay_types=[MALDI_IMS], priority=PRIORITY_FALLBACK + 2)
 
-    # NanoDESI imaging
+    # NanoDESI imaging (direct, not support)
     _REGISTRY.register("NanoDESIViewConfBuilder", assay_types=[NANODESI], priority=PRIORITY_FALLBACK + 2)
 
-    # Fallback image pyramid builder
+    # Fallback image pyramid builder (no parent required)
     _REGISTRY.register("ImagePyramidViewConfBuilder", required_hints=["is_image"], priority=PRIORITY_FALLBACK)
 
     # Null builder (absolute fallback - no hints required)
