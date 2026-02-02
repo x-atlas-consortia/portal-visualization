@@ -189,6 +189,160 @@ class BuilderRegistry:
         best = max(matching, key=lambda r: r.priority)
         return best.builder_name
 
+    def get_match_diagnostics(
+        self,
+        hints: list[str],
+        assay_type: str | None,
+        has_parent: bool = False,
+        has_epic: bool = False,
+        parent_assay_type: str | None = None,
+    ) -> dict:
+        """Get detailed diagnostic information about builder matching.
+
+        This is useful for debugging why a particular builder was (or wasn't) selected.
+
+        Args:
+            hints: List of vitessce-hints
+            assay_type: Assay type string
+            has_parent: Whether parent UUID is available
+            has_epic: Whether EPIC UUID is available
+            parent_assay_type: Assay type of parent entity (if has_parent)
+
+        Returns:
+            Dictionary with diagnostic information including:
+            - selected: Name of selected builder (or None)
+            - matching_count: Number of builders that matched
+            - matching_builders: List of matching builder names with priorities
+            - non_matching_reasons: Why builders didn't match
+
+        >>> registry = BuilderRegistry()
+        >>> registry.register("TestBuilder", required_hints=["is_image"], priority=10)
+        >>> diag = registry.get_match_diagnostics(["is_image"], None)
+        >>> diag['selected']
+        'TestBuilder'
+        >>> diag['matching_count']
+        1
+        """
+        hint_set = set(hints)
+        matching = []
+        non_matching_reasons = []
+
+        for reg in self._registrations:
+            # Check each constraint and track why it didn't match
+            reasons = []
+
+            # Check required hints
+            missing_hints = reg.required_hints - hint_set
+            if missing_hints:
+                reasons.append(f"missing required hints: {sorted(missing_hints)}")
+
+            # Check forbidden hints
+            forbidden_present = reg.forbidden_hints & hint_set
+            if forbidden_present:
+                reasons.append(f"has forbidden hints: {sorted(forbidden_present)}")
+
+            # Check assay type
+            if reg.assay_types is not None and assay_type not in reg.assay_types:
+                reasons.append(f"assay_type '{assay_type}' not in {sorted(reg.assay_types)}")
+
+            # Check parent assay type
+            if reg.parent_assay_types is not None and parent_assay_type not in reg.parent_assay_types:
+                reasons.append(
+                    f"parent_assay_type '{parent_assay_type}' not in {sorted(reg.parent_assay_types)}"
+                )
+
+            # Check parent requirement
+            if reg.requires_parent and not has_parent:
+                reasons.append("requires parent but none provided")
+
+            # Check epic requirement
+            if reg.requires_epic and not has_epic:
+                reasons.append("requires EPIC UUID but none provided")
+
+            if reasons:
+                non_matching_reasons.append({"builder": reg.builder_name, "reasons": reasons})
+            else:
+                matching.append({"builder": reg.builder_name, "priority": reg.priority})
+
+        # Sort matching by priority (highest first)
+        matching.sort(key=lambda x: x["priority"], reverse=True)
+
+        selected = matching[0]["builder"] if matching else None
+
+        return {
+            "selected": selected,
+            "matching_count": len(matching),
+            "matching_builders": matching,
+            "non_matching_reasons": non_matching_reasons,
+            "search_criteria": {
+                "hints": sorted(hints),
+                "assay_type": assay_type,
+                "has_parent": has_parent,
+                "has_epic": has_epic,
+                "parent_assay_type": parent_assay_type,
+            },
+        }
+
+    def format_no_match_message(
+        self,
+        hints: list[str],
+        assay_type: str | None,
+        has_parent: bool = False,
+        has_epic: bool = False,
+        parent_assay_type: str | None = None,
+    ) -> str:
+        """Generate a detailed error message when no builder matches.
+
+        Args:
+            hints: List of vitessce-hints
+            assay_type: Assay type string
+            has_parent: Whether parent UUID is available
+            has_epic: Whether EPIC UUID is available
+            parent_assay_type: Assay type of parent entity (if has_parent)
+
+        Returns:
+            Formatted error message with diagnostic information
+
+        >>> registry = BuilderRegistry()
+        >>> registry.register("TestBuilder", required_hints=["is_image"], priority=10)
+        >>> msg = registry.format_no_match_message(["rna"], None)
+        >>> "No builder found" in msg
+        True
+        """
+        diagnostics = self.get_match_diagnostics(hints, assay_type, has_parent, has_epic, parent_assay_type)
+
+        if diagnostics["selected"]:
+            return f"Selected builder: {diagnostics['selected']} (priority={diagnostics['matching_builders'][0]['priority']})"
+
+        # No match - build detailed error message
+        lines = [
+            "No builder found matching the following criteria:",
+            f"  Hints: {sorted(hints) if hints else '(none)'}",
+            f"  Assay type: {assay_type or '(none)'}",
+            f"  Has parent: {has_parent}",
+        ]
+
+        if has_parent and parent_assay_type:
+            lines.append(f"  Parent assay type: {parent_assay_type}")
+        if has_epic:
+            lines.append(f"  Has EPIC UUID: {has_epic}")
+
+        lines.append("")
+        lines.append(f"Evaluated {len(self._registrations)} builders:")
+
+        # Group reasons by why they didn't match
+        if diagnostics["non_matching_reasons"]:
+            # Show top 5 closest matches (fewest reasons)
+            sorted_reasons = sorted(diagnostics["non_matching_reasons"], key=lambda x: len(x["reasons"]))
+            lines.append("")
+            lines.append("Closest matches (failed due to):")
+            for item in sorted_reasons[:5]:
+                lines.append(f"  - {item['builder']}:")
+                for reason in item["reasons"]:
+                    lines.append(f"      {reason}")
+
+        return "\n".join(lines)
+
     def list_builders(self) -> list[str]:
         """List all registered builder names.
 
@@ -208,56 +362,6 @@ class BuilderRegistry:
 _REGISTRY = BuilderRegistry()
 
 
-def register_builder(
-    required_hints: list[str] | None = None,
-    forbidden_hints: list[str] | None = None,
-    assay_types: list[str] | None = None,
-    parent_assay_types: list[str] | None = None,
-    priority: int = 0,
-    requires_parent: bool = False,
-    requires_epic: bool = False,
-):
-    """Decorator to register a builder class.
-
-    This decorator allows builders to self-declare their matching criteria,
-    making the registration process more discoverable and maintainable.
-
-    Example:
-        >>> @register_builder(required_hints=["is_image", "rna"], priority=10)
-        ... class MyBuilder:
-        ...     pass
-        >>> "MyBuilder" in _REGISTRY.list_builders()
-        True
-
-    Args:
-        required_hints: Hints that must be present
-        forbidden_hints: Hints that must NOT be present
-        assay_types: Specific assay types this builder handles
-        parent_assay_types: Parent assay types this builder handles
-        priority: Selection priority (higher wins)
-        requires_parent: Whether builder needs parent entity
-        requires_epic: Whether builder needs EPIC UUID
-
-    Returns:
-        Decorator function
-    """
-
-    def decorator(cls):
-        _REGISTRY.register(
-            builder_name=cls.__name__,
-            required_hints=required_hints,
-            forbidden_hints=forbidden_hints,
-            assay_types=assay_types,
-            parent_assay_types=parent_assay_types,
-            priority=priority,
-            requires_parent=requires_parent,
-            requires_epic=requires_epic,
-        )
-        return cls
-
-    return decorator
-
-
 def get_registry() -> BuilderRegistry:
     """Get the global builder registry.
 
@@ -271,12 +375,17 @@ def get_registry() -> BuilderRegistry:
     return _REGISTRY
 
 
-def populate_legacy_registry():
-    """Populate the registry with all existing builder mappings.
+def populate_registry():
+    """Populate the registry with all builder mappings.
 
     This function replicates the logic from builder_factory._get_builder_name()
-    as registry entries, maintaining backward compatibility while allowing
-    gradual migration to decorator-based registration.
+    as registry entries, maintaining backward compatibility.
+
+    The declarative configuration list below provides:
+    - Self-documenting builder criteria
+    - Easy modification and additions
+    - Clear priority ordering
+    - Maintains string-based registration (no imports)
 
     Example usage:
         populate_legacy_registry()
@@ -290,162 +399,205 @@ def populate_legacy_registry():
     PRIORITY_MODERATE = 50  # Moderate specificity
     PRIORITY_FALLBACK = 10  # Broad fallback matches
 
-    # Object-by-analyte EPIC (highest priority - line 210: epic + len(hints)==1)
-    _REGISTRY.register(
-        "ObjectByAnalyteConfBuilder",
-        required_hints=["epic"],
-        forbidden_hints=["is_support", "segmentation_mask", "is_image", "pyramid"],
-        priority=PRIORITY_SPECIFIC + 30,
-    )
+    # Declarative builder configurations
+    # Each entry defines a builder's selection criteria and priority
+    builder_configs = [
+        # ============================================================
+        # EPIC and Segmentation Mask Builders (Highest Priority)
+        # ============================================================
+        {
+            "builder": "ObjectByAnalyteConfBuilder",
+            "description": "EPIC object-by-analyte datasets (no image/pyramid hints)",
+            "required_hints": ["epic"],
+            "forbidden_hints": ["is_support", "segmentation_mask", "is_image", "pyramid"],
+            "priority": PRIORITY_SPECIFIC + 30,
+        },
+        {
+            "builder": "EpicSegImagePyramidViewConfBuilder",
+            "description": "EPIC segmentation masks with parent dataset",
+            "required_hints": ["segmentation_mask"],
+            "requires_parent": True,
+            "requires_epic": True,
+            "priority": PRIORITY_SPECIFIC + 20,
+        },
+        {
+            "builder": "KaggleSegImagePyramidViewConfBuilder",
+            "description": "Kaggle segmentation masks (non-EPIC) with parent",
+            "required_hints": ["segmentation_mask"],
+            "requires_parent": True,
+            "forbidden_hints": ["epic"],
+            "priority": PRIORITY_SPECIFIC + 15,
+        },
+        {
+            "builder": "SegmentationMaskBuilder",
+            "description": "EPIC segmentation mask support datasets",
+            "required_hints": ["is_support"],
+            "requires_epic": True,
+            "priority": PRIORITY_SPECIFIC + 10,
+        },
+        # ============================================================
+        # Spatial Multiomics (Very Specific)
+        # ============================================================
+        {
+            "builder": "XeniumMultiomicAnnDataZarrViewConfBuilder",
+            "description": "Xenium spatial multiomics (is_image + xenium)",
+            "required_hints": ["is_image", "xenium"],
+            "priority": PRIORITY_SPECIFIC + 5,
+        },
+        {
+            "builder": "SpatialMultiomicAnnDataZarrViewConfBuilder",
+            "description": "Visium spatial RNA (is_image + rna, e.g., Visium)",
+            "required_hints": ["is_image", "rna"],
+            "priority": PRIORITY_SPECIFIC,
+        },
+        # ============================================================
+        # SPRM Imaging Builders (Moderate Priority)
+        # ============================================================
+        {
+            "builder": "MultiImageSPRMAnndataViewConfBuilder",
+            "description": "CellDIVE and other SPRM with AnnData (is_image + sprm + anndata)",
+            "required_hints": ["is_image", "sprm", "anndata"],
+            "priority": PRIORITY_MODERATE + 15,
+        },
+        {
+            "builder": "TiledSPRMViewConfBuilder",
+            "description": "Legacy JSON-based CODEX (is_image + codex + json)",
+            "required_hints": ["is_image", "json_based", "codex"],
+            "priority": PRIORITY_MODERATE + 10,
+        },
+        {
+            "builder": "StitchedCytokitSPRMViewConfBuilder",
+            "description": "CODEX without JSON (is_image + codex, no json)",
+            "required_hints": ["is_image", "codex"],
+            "forbidden_hints": ["json_based"],
+            "priority": PRIORITY_MODERATE + 5,
+        },
+        {
+            "builder": "GeoMxImagePyramidViewConfBuilder",
+            "description": "GeoMx imaging datasets",
+            "required_hints": ["geomx", "is_image"],
+            "priority": PRIORITY_MODERATE + 3,
+        },
+        # ============================================================
+        # Multiomics and RNA-seq (Moderate Priority)
+        # ============================================================
+        {
+            "builder": "MultiomicAnndataZarrViewConfBuilder",
+            "description": "Multiomics without imaging (rna + atac, no is_image)",
+            "required_hints": ["rna", "atac"],
+            "forbidden_hints": ["is_image"],
+            "priority": PRIORITY_MODERATE,
+        },
+        {
+            "builder": "RNASeqViewConfBuilder",
+            "description": "JSON-based RNA-seq (rna + json, no imaging)",
+            "required_hints": ["rna", "json_based"],
+            "forbidden_hints": ["is_image"],
+            "priority": PRIORITY_MODERATE - 3,
+        },
+        {
+            "builder": "SpatialRNASeqAnnDataZarrViewConfBuilder",
+            "description": "Spatial RNA-seq by assay type (Salmon RNA-seq Slide)",
+            "required_hints": ["rna"],
+            "assay_types": [SALMON_RNASSEQ_SLIDE],
+            "forbidden_hints": ["is_image", "json_based"],
+            "priority": PRIORITY_MODERATE - 5,
+        },
+        # ============================================================
+        # SPRM Non-Imaging (Fallback Priority)
+        # ============================================================
+        {
+            "builder": "SPRMJSONViewConfBuilder",
+            "description": "SPRM with JSON (no imaging)",
+            "required_hints": ["sprm", "json_based"],
+            "priority": PRIORITY_FALLBACK + 15,
+        },
+        {
+            "builder": "SPRMAnnDataViewConfBuilder",
+            "description": "SPRM with AnnData (no imaging)",
+            "required_hints": ["sprm", "anndata"],
+            "priority": PRIORITY_FALLBACK + 10,
+        },
+        # ============================================================
+        # Generic Sequencing Data (Fallback Priority)
+        # ============================================================
+        {
+            "builder": "RNASeqAnnDataZarrViewConfBuilder",
+            "description": "Generic RNA-seq with AnnData/Zarr",
+            "required_hints": ["rna"],
+            "priority": PRIORITY_FALLBACK + 5,
+        },
+        {
+            "builder": "ATACSeqViewConfBuilder",
+            "description": "ATAC-seq datasets",
+            "required_hints": ["atac"],
+            "priority": PRIORITY_FALLBACK + 5,
+        },
+        # ============================================================
+        # Support Image Pyramids with Parent-Specific Builders
+        # ============================================================
+        {
+            "builder": "SeqFISHViewConfBuilder",
+            "description": "SeqFISH support images (parent assay type = seqFISH)",
+            "required_hints": ["is_support", "is_image"],
+            "parent_assay_types": [SEQFISH],
+            "requires_parent": True,
+            "forbidden_hints": ["segmentation_mask"],
+            "priority": PRIORITY_FALLBACK + 10,
+        },
+        {
+            "builder": "IMSViewConfBuilder",
+            "description": "MALDI-IMS support images (parent assay type = MALDI IMS)",
+            "required_hints": ["is_support", "is_image"],
+            "parent_assay_types": [MALDI_IMS],
+            "requires_parent": True,
+            "forbidden_hints": ["segmentation_mask"],
+            "priority": PRIORITY_FALLBACK + 10,
+        },
+        {
+            "builder": "NanoDESIViewConfBuilder",
+            "description": "NanoDESI support images (parent assay type = NanoDESI)",
+            "required_hints": ["is_support", "is_image"],
+            "parent_assay_types": [NANODESI],
+            "requires_parent": True,
+            "forbidden_hints": ["segmentation_mask"],
+            "priority": PRIORITY_FALLBACK + 10,
+        },
+        {
+            "builder": "ImagePyramidViewConfBuilder",
+            "description": "Generic support image pyramid (fallback for other parent assay types)",
+            "required_hints": ["is_support", "is_image"],
+            "requires_parent": True,
+            "forbidden_hints": ["segmentation_mask"],
+            "priority": PRIORITY_FALLBACK + 8,
+        },
+        # ============================================================
+        # Direct Imaging by Assay Type (Fallback Priority)
+        # ============================================================
+        {
+            "builder": "IMSViewConfBuilder",
+            "description": "Direct MALDI-IMS imaging (assay type, not support)",
+            "assay_types": [MALDI_IMS],
+            "priority": PRIORITY_FALLBACK + 2,
+        },
+        {
+            "builder": "NanoDESIViewConfBuilder",
+            "description": "Direct NanoDESI imaging (assay type, not support)",
+            "assay_types": [NANODESI],
+            "priority": PRIORITY_FALLBACK + 2,
+        },
+        # ============================================================
+        # Null Builder (Absolute Fallback)
+        # ============================================================
+        {
+            "builder": "NullViewConfBuilder",
+            "description": "Fallback for datasets without visualization support",
+            "priority": 0,
+        },
+    ]
 
-    # EPIC and segmentation mask builders with parent (line 216: is_seg_mask and epic_uuid and parent)
-    _REGISTRY.register(
-        "EpicSegImagePyramidViewConfBuilder",
-        required_hints=["segmentation_mask"],
-        requires_parent=True,
-        requires_epic=True,
-        priority=PRIORITY_SPECIFIC + 20,
-    )
-
-    # Kaggle segmentation mask without epic (line 218: is_seg_mask and parent, no epic)
-    _REGISTRY.register(
-        "KaggleSegImagePyramidViewConfBuilder",
-        required_hints=["segmentation_mask"],
-        requires_parent=True,
-        forbidden_hints=["epic"],
-        priority=PRIORITY_SPECIFIC + 15,
-    )
-
-    # Segmentation mask support (base image support, line 301)
-    _REGISTRY.register(
-        "SegmentationMaskBuilder", required_hints=["is_support"], requires_epic=True, priority=PRIORITY_SPECIFIC + 10
-    )
-
-    # Spatial multiomics (very specific)
-    # Xenium only requires xenium + is_image hints (builder_factory.py line 260)
-    _REGISTRY.register(
-        "XeniumMultiomicAnnDataZarrViewConfBuilder",
-        required_hints=["is_image", "xenium"],
-        priority=PRIORITY_SPECIFIC + 5,
-    )
-
-    # Visium: is_image + is_rna (line 244)
-    _REGISTRY.register(
-        "SpatialMultiomicAnnDataZarrViewConfBuilder",
-        required_hints=["is_image", "rna"],
-        priority=PRIORITY_SPECIFIC,
-    )
-
-    # SPRM builders (image + SPRM combinations)
-    # CellDIVE: is_image + is_sprm + is_anndata (line 248)
-    _REGISTRY.register(
-        "MultiImageSPRMAnndataViewConfBuilder",
-        required_hints=["is_image", "sprm", "anndata"],
-        priority=PRIORITY_MODERATE + 15,
-    )
-
-    # Legacy JSON CODEX: is_image + codex + is_json (line 252)
-    _REGISTRY.register(
-        "TiledSPRMViewConfBuilder", required_hints=["is_image", "json_based", "codex"], priority=PRIORITY_MODERATE + 10
-    )
-
-    # CODEX without json: is_image + codex (line 256)
-    _REGISTRY.register(
-        "StitchedCytokitSPRMViewConfBuilder",
-        required_hints=["is_image", "codex"],
-        forbidden_hints=["json_based"],
-        priority=PRIORITY_MODERATE + 5,
-    )
-
-    # GeoMx (line 258)
-    _REGISTRY.register(
-        "GeoMxImagePyramidViewConfBuilder", required_hints=["geomx", "is_image"], priority=PRIORITY_MODERATE + 3
-    )
-
-    # Multiomics (no image) - requires both rna and atac hints (builder_factory.py line 265)
-    _REGISTRY.register(
-        "MultiomicAnndataZarrViewConfBuilder",
-        required_hints=["rna", "atac"],
-        forbidden_hints=["is_image"],
-        priority=PRIORITY_MODERATE,
-    )
-
-    # JSON-based RNA-seq (line 267)
-    _REGISTRY.register(
-        "RNASeqViewConfBuilder",
-        required_hints=["rna", "json_based"],
-        forbidden_hints=["is_image"],
-        priority=PRIORITY_MODERATE - 3,
-    )
-
-    # Spatial RNA-seq by assay type (line 270)
-    _REGISTRY.register(
-        "SpatialRNASeqAnnDataZarrViewConfBuilder",
-        required_hints=["rna"],
-        assay_types=[SALMON_RNASSEQ_SLIDE],
-        forbidden_hints=["is_image", "json_based"],
-        priority=PRIORITY_MODERATE - 5,
-    )
-
-    # SPRM with JSON
-    _REGISTRY.register(
-        "SPRMJSONViewConfBuilder", required_hints=["sprm", "json_based"], priority=PRIORITY_FALLBACK + 15
-    )
-
-    # SPRM with AnnData
-    _REGISTRY.register(
-        "SPRMAnnDataViewConfBuilder", required_hints=["sprm", "anndata"], priority=PRIORITY_FALLBACK + 10
-    )
-
-    # Sequencing data (line 274)
-    _REGISTRY.register("RNASeqAnnDataZarrViewConfBuilder", required_hints=["rna"], priority=PRIORITY_FALLBACK + 5)
-
-    # ATAC-seq (line 276)
-    _REGISTRY.register("ATACSeqViewConfBuilder", required_hints=["atac"], priority=PRIORITY_FALLBACK + 5)
-
-    # Support image pyramids with parent-specific builders (requires parent, uses parent assay type)
-    # These have higher priority than the generic image pyramid builder (lines 220-238)
-    _REGISTRY.register(
-        "SeqFISHViewConfBuilder",
-        required_hints=["is_support", "is_image"],
-        parent_assay_types=[SEQFISH],
-        requires_parent=True,
-        forbidden_hints=["segmentation_mask"],
-        priority=PRIORITY_FALLBACK + 10,
-    )
-
-    _REGISTRY.register(
-        "IMSViewConfBuilder",
-        required_hints=["is_support", "is_image"],
-        parent_assay_types=[MALDI_IMS],
-        requires_parent=True,
-        forbidden_hints=["segmentation_mask"],
-        priority=PRIORITY_FALLBACK + 10,
-    )
-
-    _REGISTRY.register(
-        "NanoDESIViewConfBuilder",
-        required_hints=["is_support", "is_image"],
-        parent_assay_types=[NANODESI],
-        requires_parent=True,
-        forbidden_hints=["segmentation_mask"],
-        priority=PRIORITY_FALLBACK + 10,
-    )
-
-    # Generic support image pyramid (fallback when parent assay type doesn't match specific builders, line 236)
-    _REGISTRY.register(
-        "ImagePyramidViewConfBuilder",
-        required_hints=["is_support", "is_image"],
-        requires_parent=True,
-        forbidden_hints=["segmentation_mask"],
-        priority=PRIORITY_FALLBACK + 8,
-    )
-
-    # IMS imaging (direct, not support)
-    _REGISTRY.register("IMSViewConfBuilder", assay_types=[MALDI_IMS], priority=PRIORITY_FALLBACK + 2)
-
-    # NanoDESI imaging (direct, not support)
-    _REGISTRY.register("NanoDESIViewConfBuilder", assay_types=[NANODESI], priority=PRIORITY_FALLBACK + 2)
-
-    # Null builder (absolute fallback - no hints required)
-    _REGISTRY.register("NullViewConfBuilder", priority=0)
+    # Register all builders from the configuration list
+    for config in builder_configs:
+        builder_name = config.pop("builder")
+        _ = config.pop("description", None)  # Remove description (documentation only, not used in registration)
+        _REGISTRY.register(builder_name, **config)

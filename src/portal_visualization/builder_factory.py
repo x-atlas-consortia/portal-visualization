@@ -1,7 +1,8 @@
 import os
+import warnings
 
 from .assays import MALDI_IMS, NANODESI, SALMON_RNASSEQ_SLIDE, SEQFISH
-from .builder_registry import get_registry, populate_legacy_registry
+from .builder_registry import get_registry, populate_registry
 from .builders.base_builders import NullViewConfBuilder
 
 # Initialize the registry on module import
@@ -20,7 +21,7 @@ def _ensure_registry_initialized():
     """
     global _registry_initialized
     if not _registry_initialized:
-        populate_legacy_registry()
+        populate_registry()
         _registry_initialized = True
 
 
@@ -324,9 +325,16 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     )
 
     if builder_name is None:  # pragma: no cover
-        # Fallback to NullViewConfBuilder if no match found
-        # Note: This is covered by test_registry_experimental.py but coverage tracking
-        # doesn't always capture it. The test demonstrates this path works correctly.
+        # No match found - generate detailed diagnostic message
+        error_msg = registry.format_no_match_message(
+            hints=hints,
+            assay_type=assay_type,
+            has_parent=has_parent,
+            has_epic=has_epic,
+            parent_assay_type=parent_assay_type,
+        )
+        warnings.warn(f"Builder selection failed:\n{error_msg}", UserWarning, stacklevel=2)
+        # Fallback to NullViewConfBuilder
         return "NullViewConfBuilder"
 
     return builder_name

@@ -148,5 +148,135 @@ def get_entity_from_args(url_arg, json_arg, headers):  # pragma: no cover
     return entity
 
 
+def debug_builder_selection():  # pragma: no cover
+    """CLI entry point for debugging builder selection.
+
+    This command helps diagnose why a particular builder was (or wasn't) selected.
+    """
+    import os
+
+    parser = argparse.ArgumentParser(
+        description="Debug builder selection for a dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Check builder selection for a dataset
+  python -m portal_visualization.cli debug --json dataset.json
+
+  # Use registry mode
+  USE_BUILDER_REGISTRY=1 python -m portal_visualization.cli debug --json dataset.json
+
+  # Provide hints directly
+  python -m portal_visualization.cli debug --hints is_image rna
+        """,
+    )
+
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--json", type=Path, help="File containing Dataset JSON")
+    input_group.add_argument("--url", help="URL which returns Dataset JSON")
+    input_group.add_argument("--hints", nargs="+", help="Hints to test directly")
+
+    parser.add_argument("--assay-type", help="Assay type to test")
+    parser.add_argument("--parent-assay-type", help="Parent assay type to test")
+    parser.add_argument("--has-parent", action="store_true", help="Simulate having a parent")
+    parser.add_argument("--has-epic", action="store_true", help="Simulate having an EPIC UUID")
+    parser.add_argument("--token", help="Globus groups token for protected datasets", default="")
+
+    args = parser.parse_args()
+
+    # Determine which mode we're using
+    use_registry = os.environ.get("USE_BUILDER_REGISTRY", "0") == "1"
+
+    if args.hints:
+        # Direct hints mode
+        hints = args.hints
+        assay_type = args.assay_type
+        parent_assay_type = args.parent_assay_type
+        has_parent = args.has_parent
+        has_epic = args.has_epic
+    else:
+        # Load from JSON
+        entity = _get_entity(args.url, args.json, args.token)
+        hints = entity.get("vitessce-hints", [])
+        assay_type = entity.get("soft_assaytype")
+        parent_assay_type = args.parent_assay_type
+        has_parent = args.has_parent
+        has_epic = args.has_epic
+
+    print("=" * 80)
+    print("BUILDER SELECTION DIAGNOSTICS")
+    print("=" * 80)
+    print(f"Mode: {'REGISTRY' if use_registry else 'LEGACY FACTORY'}")
+    print()
+
+    if use_registry:
+        # Use registry diagnostics
+        from portal_visualization.builder_registry import get_registry, populate_registry
+
+        populate_registry()
+        registry = get_registry()
+
+        diagnostics = registry.get_match_diagnostics(
+            hints=hints,
+            assay_type=assay_type,
+            has_parent=has_parent,
+            has_epic=has_epic,
+            parent_assay_type=parent_assay_type,
+        )
+
+        print("Search Criteria:")
+        print(f"  Hints: {diagnostics['search_criteria']['hints']}")
+        print(f"  Assay type: {diagnostics['search_criteria']['assay_type'] or '(none)'}")
+        print(f"  Has parent: {diagnostics['search_criteria']['has_parent']}")
+        if parent_assay_type:
+            print(f"  Parent assay type: {parent_assay_type}")
+        if has_epic:
+            print(f"  Has EPIC UUID: {has_epic}")
+        print()
+
+        if diagnostics["selected"]:
+            print(f"✓ SELECTED BUILDER: {diagnostics['selected']}")
+            print(f"  Priority: {diagnostics['matching_builders'][0]['priority']}")
+            print()
+
+            if len(diagnostics["matching_builders"]) > 1:
+                print(f"Other matching builders ({len(diagnostics['matching_builders']) - 1}):")
+                for match in diagnostics["matching_builders"][1:]:
+                    print(f"  - {match['builder']} (priority={match['priority']})")
+                print()
+        else:
+            print("✗ NO BUILDER MATCHED")
+            print()
+            print(registry.format_no_match_message(hints, assay_type, has_parent, has_epic, parent_assay_type))
+
+    else:
+        # Use legacy factory
+        from portal_visualization.builder_factory import _get_builder_name
+
+        print("Search Criteria:")
+        print(f"  Hints: {sorted(hints)}")
+        print(f"  Assay type: {assay_type or '(none)'}")
+        print()
+
+        builder_name = _get_builder_name(
+            entity={"vitessce-hints": hints, "soft_assaytype": assay_type},
+            get_entity=None,
+            parent="dummy" if has_parent else None,
+            epic_uuid="dummy" if has_epic else None,
+        )
+
+        print(f"✓ SELECTED BUILDER: {builder_name}")
+        print()
+        print("Note: Use USE_BUILDER_REGISTRY=1 for detailed diagnostics")
+
+    print("=" * 80)
+
+
 if __name__ == "__main__":  # pragma: no cover
-    main()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "debug":
+        sys.argv.pop(1)  # Remove 'debug' from args
+        debug_builder_selection()
+    else:
+        main()
