@@ -283,111 +283,134 @@ def populate_legacy_registry():
         # Registry now contains all builder mappings
     """
     # Import assay constants that actually exist
-    from .assays import CODEX_CYTOKIT, MALDI_IMS, NANODESI, SALMON_RNASSEQ_SLIDE, SEQFISH
+    from .assays import MALDI_IMS, NANODESI, SALMON_RNASSEQ_SLIDE, SEQFISH
 
     # Priority levels (higher = more specific match gets selected)
     PRIORITY_SPECIFIC = 100  # Very specific combinations
     PRIORITY_MODERATE = 50  # Moderate specificity
     PRIORITY_FALLBACK = 10  # Broad fallback matches
 
-    # EPIC and segmentation mask builders (highest priority - most specific)
+    # Object-by-analyte EPIC (highest priority - line 210: epic + len(hints)==1)
+    _REGISTRY.register(
+        "ObjectByAnalyteConfBuilder",
+        required_hints=["epic"],
+        forbidden_hints=["is_support", "segmentation_mask", "is_image", "pyramid"],
+        priority=PRIORITY_SPECIFIC + 30,
+    )
+
+    # EPIC and segmentation mask builders with parent (line 216: is_seg_mask and epic_uuid and parent)
     _REGISTRY.register(
         "EpicSegImagePyramidViewConfBuilder",
-        required_hints=["is_support", "is_image"],
+        required_hints=["segmentation_mask"],
         requires_parent=True,
         requires_epic=True,
         priority=PRIORITY_SPECIFIC + 20,
     )
 
+    # Kaggle segmentation mask without epic (line 218: is_seg_mask and parent, no epic)
+    _REGISTRY.register(
+        "KaggleSegImagePyramidViewConfBuilder",
+        required_hints=["segmentation_mask"],
+        requires_parent=True,
+        forbidden_hints=["epic"],
+        priority=PRIORITY_SPECIFIC + 15,
+    )
+
+    # Segmentation mask support (base image support, line 301)
     _REGISTRY.register(
         "SegmentationMaskBuilder", required_hints=["is_support"], requires_epic=True, priority=PRIORITY_SPECIFIC + 10
     )
 
     # Spatial multiomics (very specific)
+    # Xenium only requires xenium + is_image hints (builder_factory.py line 260)
     _REGISTRY.register(
         "XeniumMultiomicAnnDataZarrViewConfBuilder",
-        required_hints=["is_image", "rna", "spatial", "xenium"],
+        required_hints=["is_image", "xenium"],
         priority=PRIORITY_SPECIFIC + 5,
     )
 
+    # Visium: is_image + is_rna (line 244)
     _REGISTRY.register(
         "SpatialMultiomicAnnDataZarrViewConfBuilder",
-        required_hints=["is_image", "rna", "spatial"],
+        required_hints=["is_image", "rna"],
         priority=PRIORITY_SPECIFIC,
     )
 
     # SPRM builders (image + SPRM combinations)
+    # CellDIVE: is_image + is_sprm + is_anndata (line 248)
     _REGISTRY.register(
         "MultiImageSPRMAnndataViewConfBuilder",
-        required_hints=["is_image", "is_sprm", "is_anndata"],
+        required_hints=["is_image", "sprm", "anndata"],
         priority=PRIORITY_MODERATE + 15,
     )
 
+    # Legacy JSON CODEX: is_image + codex + is_json (line 252)
     _REGISTRY.register(
-        "TiledSPRMViewConfBuilder", required_hints=["is_image", "is_json", "codex"], priority=PRIORITY_MODERATE + 10
+        "TiledSPRMViewConfBuilder", required_hints=["is_image", "json_based", "codex"], priority=PRIORITY_MODERATE + 10
     )
 
+    # CODEX without json: is_image + codex (line 256)
     _REGISTRY.register(
         "StitchedCytokitSPRMViewConfBuilder",
         required_hints=["is_image", "codex"],
-        assay_types=[CODEX_CYTOKIT],
+        forbidden_hints=["json_based"],
         priority=PRIORITY_MODERATE + 5,
     )
 
-    # SeqFISH (support dataset with parent)
+    # GeoMx (line 258)
     _REGISTRY.register(
-        "SeqFISHViewConfBuilder",
-        required_hints=["is_support", "is_image"],
-        requires_parent=True,
-        assay_types=[SEQFISH],
-        priority=PRIORITY_MODERATE + 8,
+        "GeoMxImagePyramidViewConfBuilder", required_hints=["geomx", "is_image"], priority=PRIORITY_MODERATE + 3
     )
 
-    # GeoMx
-    _REGISTRY.register("GeoMxImagePyramidViewConfBuilder", required_hints=["geomx"], priority=PRIORITY_MODERATE + 3)
-
-    # Multiomics (no image)
+    # Multiomics (no image) - requires both rna and atac hints (builder_factory.py line 265)
     _REGISTRY.register(
-        "MultiomicAnndataZarrViewConfBuilder", required_hints=["is_multiome"], priority=PRIORITY_MODERATE
+        "MultiomicAnndataZarrViewConfBuilder",
+        required_hints=["rna", "atac"],
+        forbidden_hints=["is_image"],
+        priority=PRIORITY_MODERATE,
     )
 
-    # Spatial RNA-seq
+    # JSON-based RNA-seq (line 267)
+    _REGISTRY.register(
+        "RNASeqViewConfBuilder",
+        required_hints=["rna", "json_based"],
+        forbidden_hints=["is_image"],
+        priority=PRIORITY_MODERATE - 3,
+    )
+
+    # Spatial RNA-seq by assay type (line 270)
     _REGISTRY.register(
         "SpatialRNASeqAnnDataZarrViewConfBuilder",
-        required_hints=["rna", "spatial"],
+        required_hints=["rna"],
         assay_types=[SALMON_RNASSEQ_SLIDE],
+        forbidden_hints=["is_image", "json_based"],
         priority=PRIORITY_MODERATE - 5,
     )
 
     # SPRM with JSON
     _REGISTRY.register(
-        "SPRMJSONViewConfBuilder", required_hints=["is_sprm", "is_json"], priority=PRIORITY_FALLBACK + 15
+        "SPRMJSONViewConfBuilder", required_hints=["sprm", "json_based"], priority=PRIORITY_FALLBACK + 15
     )
 
     # SPRM with AnnData
     _REGISTRY.register(
-        "SPRMAnnDataViewConfBuilder", required_hints=["is_sprm", "is_anndata"], priority=PRIORITY_FALLBACK + 10
+        "SPRMAnnDataViewConfBuilder", required_hints=["sprm", "anndata"], priority=PRIORITY_FALLBACK + 10
     )
 
-    # Object-by-analyte
-    _REGISTRY.register(
-        "ObjectByAnalyteConfBuilder", required_hints=["is_object_by_analyte"], priority=PRIORITY_FALLBACK + 8
-    )
-
-    # Sequencing data
+    # Sequencing data (line 274)
     _REGISTRY.register("RNASeqAnnDataZarrViewConfBuilder", required_hints=["rna"], priority=PRIORITY_FALLBACK + 5)
 
+    # ATAC-seq (line 276)
     _REGISTRY.register("ATACSeqViewConfBuilder", required_hints=["atac"], priority=PRIORITY_FALLBACK + 5)
 
-    _REGISTRY.register("RNASeqViewConfBuilder", required_hints=["is_sc"], priority=PRIORITY_FALLBACK + 3)
-
     # Support image pyramids with parent-specific builders (requires parent, uses parent assay type)
-    # These have higher priority than the generic image pyramid builder
+    # These have higher priority than the generic image pyramid builder (lines 220-238)
     _REGISTRY.register(
         "SeqFISHViewConfBuilder",
         required_hints=["is_support", "is_image"],
         parent_assay_types=[SEQFISH],
         requires_parent=True,
+        forbidden_hints=["segmentation_mask"],
         priority=PRIORITY_FALLBACK + 10,
     )
 
@@ -396,6 +419,7 @@ def populate_legacy_registry():
         required_hints=["is_support", "is_image"],
         parent_assay_types=[MALDI_IMS],
         requires_parent=True,
+        forbidden_hints=["segmentation_mask"],
         priority=PRIORITY_FALLBACK + 10,
     )
 
@@ -404,14 +428,16 @@ def populate_legacy_registry():
         required_hints=["is_support", "is_image"],
         parent_assay_types=[NANODESI],
         requires_parent=True,
+        forbidden_hints=["segmentation_mask"],
         priority=PRIORITY_FALLBACK + 10,
     )
 
-    # Generic support image pyramid (fallback when parent assay type doesn't match specific builders)
+    # Generic support image pyramid (fallback when parent assay type doesn't match specific builders, line 236)
     _REGISTRY.register(
         "ImagePyramidViewConfBuilder",
         required_hints=["is_support", "is_image"],
         requires_parent=True,
+        forbidden_hints=["segmentation_mask"],
         priority=PRIORITY_FALLBACK + 8,
     )
 
@@ -420,9 +446,6 @@ def populate_legacy_registry():
 
     # NanoDESI imaging (direct, not support)
     _REGISTRY.register("NanoDESIViewConfBuilder", assay_types=[NANODESI], priority=PRIORITY_FALLBACK + 2)
-
-    # Fallback image pyramid builder (no parent required)
-    _REGISTRY.register("ImagePyramidViewConfBuilder", required_hints=["is_image"], priority=PRIORITY_FALLBACK)
 
     # Null builder (absolute fallback - no hints required)
     _REGISTRY.register("NullViewConfBuilder", priority=0)

@@ -155,3 +155,28 @@ class TestRegistryExperimental:
 
         # Should match SeqFISHViewConfBuilder based on parent assay type
         assert builder_name == "SeqFISHViewConfBuilder"
+
+    def test_registry_parent_fetch_error_handling(self):
+        """Test that _get_builder_name_from_registry handles missing parent gracefully."""
+        from portal_visualization.builder_factory import _get_builder_name_from_registry
+
+        # Create support entity (image pyramid)
+        support_entity = {
+            "uuid": "support-uuid",
+            "vitessce-hints": ["is_support", "is_image"],
+        }
+
+        # Mock get_entity that raises FileNotFoundError
+        def mock_get_entity_fail(uuid):
+            raise FileNotFoundError(f"No such file: {uuid}")
+
+        # Lines 314-316: Should handle FileNotFoundError gracefully
+        builder_name = _get_builder_name_from_registry(
+            support_entity,
+            mock_get_entity_fail,
+            "nonexistent-parent",  # parent UUID that doesn't exist
+            None,
+        )
+
+        # Should fallback to generic ImagePyramidViewConfBuilder
+        assert builder_name == "ImagePyramidViewConfBuilder"

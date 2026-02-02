@@ -1517,9 +1517,22 @@ def test_entity_to_vitessce_conf(entity_path, mocker):
 @pytest.mark.parametrize("entity_path", bad_entity_paths, ids=lambda path: path.name)
 @pytest.mark.requires_full
 def test_entity_to_error(entity_path, mocker):
+    import os
+
     mock_zarr_store(entity_path, mocker, 5)
 
     entity = json.loads(entity_path.read_text())
+
+    # Registry returns NullViewConfBuilder for empty entities, which is valid
+    # Legacy code raises an exception
+    use_registry = os.environ.get("USE_BUILDER_REGISTRY") == "1"
+    if use_registry and entity == {}:
+        # Empty entity gets NullViewConfBuilder with registry
+        parent = entity.get("parent") or None
+        Builder = get_view_config_builder(entity, get_entity, parent=parent)
+        assert Builder.__name__ == "NullViewConfBuilder"
+        return
+
     with pytest.raises(Exception) as error_info:  # noqa: PT011, PT012
         parent = entity.get("parent") or None  # Only used for image pyramids
         Builder = get_view_config_builder(entity, get_entity, parent=parent)

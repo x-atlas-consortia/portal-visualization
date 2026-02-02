@@ -308,8 +308,12 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     # Get parent assay type if parent exists
     parent_assay_type = None
     if parent is not None and get_entity is not None:
-        parent_entity = get_entity(parent)
-        parent_assay_type = parent_entity.get("soft_assaytype")
+        try:
+            parent_entity = get_entity(parent)
+            parent_assay_type = parent_entity.get("soft_assaytype")
+        except (FileNotFoundError, KeyError):
+            # Parent entity not found or doesn't have soft_assaytype
+            pass
 
     builder_name = registry.find_builder(
         hints=hints,
