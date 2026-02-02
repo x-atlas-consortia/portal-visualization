@@ -51,7 +51,6 @@ def _lazy_import_builder(builder_name):
         XeniumMultiomicAnnDataZarrViewConfBuilder,
     )
     from .builders.epic_builders import (
-        EPICConfBuilder,
         SegmentationMaskBuilder,
     )
     from .builders.imaging_builders import (
@@ -98,7 +97,6 @@ def _lazy_import_builder(builder_name):
         "SPRMJSONViewConfBuilder": SPRMJSONViewConfBuilder,
         "StitchedCytokitSPRMViewConfBuilder": StitchedCytokitSPRMViewConfBuilder,
         "TiledSPRMViewConfBuilder": TiledSPRMViewConfBuilder,
-        "EPICConfBuilder": EPICConfBuilder,
         "SegmentationMaskBuilder": SegmentationMaskBuilder,
     }
 
@@ -149,7 +147,7 @@ def process_hints(hints):
 # It returns the correct builder for the given entity.
 #
 # The entity is a dict that contains the entity UUID and metadata.
-def get_view_config_builder(entity, get_entity, parent=None, epic_uuid=None):
+def get_view_config_builder(entity, get_entity, parent=None):
     """Get the appropriate builder class for an entity.
 
     Returns a builder class (not an instance) that can be used to generate
@@ -158,15 +156,14 @@ def get_view_config_builder(entity, get_entity, parent=None, epic_uuid=None):
     :param dict entity: Entity response from search index
     :param callable get_entity: Function to retrieve entity by UUID
     :param str parent: Parent entity UUID if this is a support dataset
-    :param str epic_uuid: EPIC UUID if this is an EPIC-related dataset
     :return: Builder class
     :rtype: type
     """
-    builder_name = _get_builder_name(entity, get_entity, parent, epic_uuid)
+    builder_name = _get_builder_name(entity, get_entity, parent)
     return _lazy_import_builder(builder_name)
 
 
-def _get_builder_name(entity, get_entity, parent=None, epic_uuid=None):
+def _get_builder_name(entity, get_entity, parent=None):
     """Get the name of the appropriate builder for an entity.
 
     This is the core decision logic that doesn't require importing heavy dependencies.
@@ -175,13 +172,12 @@ def _get_builder_name(entity, get_entity, parent=None, epic_uuid=None):
     :param dict entity: Entity response from search index
     :param callable get_entity: Function to retrieve entity by UUID
     :param str parent: Parent entity UUID if this is a support dataset
-    :param str epic_uuid: EPIC UUID if this is an EPIC-related dataset
     :return: Builder class name
     :rtype: str
     """
     # Use new registry-based system if enabled (experimental)
     if USE_BUILDER_REGISTRY:
-        return _get_builder_name_from_registry(entity, get_entity, parent, epic_uuid)
+        return _get_builder_name_from_registry(entity, get_entity, parent)
 
     # Legacy implementation (default) - fully tested and reliable
     if entity.get("uuid") is None:
@@ -210,9 +206,11 @@ def _get_builder_name(entity, get_entity, parent=None, epic_uuid=None):
 
     # vis-lifted image pyramids
     if parent is not None:
-        # TODO: For now epic (base image's) support datasets doesn't have any hints
-        if is_seg_mask and epic_uuid:
-            return "EpicSegImagePyramidViewConfBuilder"
+        # Segmentation masks - check for epic hint to determine which builder
+        # EPIC segmentation masks have "epic" hint (new standalone builder)
+        # Kaggle masks don't have "epic" hint (old legacy builder)
+        if is_seg_mask and is_epic:
+            return "SegmentationMaskBuilder"
         elif is_seg_mask:
             return "KaggleSegImagePyramidViewConfBuilder"
 
@@ -280,7 +278,7 @@ def _get_builder_name(entity, get_entity, parent=None, epic_uuid=None):
     return "NullViewConfBuilder"
 
 
-def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=None):
+def _get_builder_name_from_registry(entity, get_entity, parent=None):
     """Get builder name using the registry system.
 
     This is the new implementation that uses the builder registry instead of
@@ -290,7 +288,6 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     :param dict entity: Entity response from search index
     :param callable get_entity: Function to retrieve entity by UUID
     :param str parent: Parent entity UUID if this is a support dataset
-    :param str epic_uuid: EPIC UUID if this is an EPIC-related dataset
     :return: Builder class name
     :rtype: str
 
@@ -304,7 +301,8 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     hints = entity.get("vitessce-hints", [])
     assay_type = entity.get("soft_assaytype")
     has_parent = parent is not None
-    has_epic = epic_uuid is not None
+    # Detect EPIC datasets by checking for relevant hints
+    has_epic = "epic" in hints or "is_support" in hints or "segmentation_mask" in hints
 
     # Get parent assay type if parent exists
     parent_assay_type = None
@@ -340,7 +338,7 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None, epic_uuid=N
     return builder_name
 
 
-def has_visualization(entity, get_entity, parent=None, epic_uuid=None):
+def has_visualization(entity, get_entity, parent=None):
     """Check if an entity has a visualization without loading heavy dependencies.
 
     This function works with the thin install (no [full] extras required).
@@ -348,9 +346,8 @@ def has_visualization(entity, get_entity, parent=None, epic_uuid=None):
     :param dict entity: Entity response from search index
     :param callable get_entity: Function to retrieve entity by UUID
     :param str parent: Parent entity UUID if this is a support dataset
-    :param str epic_uuid: EPIC UUID if this is an EPIC-related dataset
     :return: True if the entity has a visualization, False otherwise
     :rtype: bool
     """
-    builder_name = _get_builder_name(entity, get_entity, parent, epic_uuid)
+    builder_name = _get_builder_name(entity, get_entity, parent)
     return builder_name != "NullViewConfBuilder"

@@ -26,7 +26,7 @@ class TestRegistryExperimental:
         # Enable registry
         with patch("portal_visualization.builder_factory.USE_BUILDER_REGISTRY", 1):
             # Line 183: Registry call when enabled
-            builder_name = _get_builder_name(entity, lambda x: entity, None, None)
+            builder_name = _get_builder_name(entity, lambda x: entity, None)
 
             # Should get a builder from registry
             assert builder_name is not None
@@ -44,7 +44,7 @@ class TestRegistryExperimental:
         }
 
         # Line 312: Should fallback to NullViewConfBuilder when no match found
-        builder_name = _get_builder_name_from_registry(entity, lambda x: entity, None, None)
+        builder_name = _get_builder_name_from_registry(entity, lambda x: entity, None)
         assert builder_name == "NullViewConfBuilder"
 
     def test_registration_matches_edge_cases(self):
@@ -150,7 +150,6 @@ class TestRegistryExperimental:
             support_entity,
             mock_get_entity,
             "parent-uuid",  # parent UUID
-            None,
         )
 
         # Should match SeqFISHViewConfBuilder based on parent assay type
@@ -175,7 +174,6 @@ class TestRegistryExperimental:
             support_entity,
             mock_get_entity_fail,
             "nonexistent-parent",  # parent UUID that doesn't exist
-            None,
         )
 
         # Should fallback to generic ImagePyramidViewConfBuilder

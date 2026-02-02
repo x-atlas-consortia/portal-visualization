@@ -1,10 +1,10 @@
 import random
 import re
-from abc import abstractmethod
 
 from requests import get
 from vitessce import (
     AnnDataWrapper,
+    ImageOmeTiffWrapper,
     ObsSegmentationsOmeTiffWrapper,
     VitessceConfig,
     get_initial_coordination_scope_prefix,
@@ -21,103 +21,81 @@ from ..paths import (
     SEGMENTATION_ZARR_STORES,
 )
 from ..utils import get_conf_cells, get_image_metadata, get_image_scale, get_matches
-from .base_builders import ConfCells, ViewConfBuilder
+from .base_builders import ViewConfBuilder
 
 zarr_path = f"{SEGMENTATION_SUBDIR}/{SEGMENTATION_ZARR_STORES}"
 
-# EPIC builders take in a vitessce conf output by a previous builder and modify it
-# accordingly to add the EPIC-specific configuration.
 
+class SegmentationMaskBuilder(ViewConfBuilder):
+    """Builder for EPIC segmentation mask support datasets.
 
-class EPICConfBuilder(ViewConfBuilder):
-    def __init__(
-        self, epic_uuid, base_conf: ConfCells, entity, groups_token, assets_endpoint, base_image_metadata, **kwargs
-    ) -> None:
+    Creates visualizations that overlay segmentation masks on base images from the parent dataset.
+    Requires a parent dataset with base images.
+    """
+
+    def __init__(self, entity, groups_token, assets_endpoint, get_entity=None, parent=None, **kwargs):
         super().__init__(entity, groups_token, assets_endpoint, **kwargs)
-
-        conf, cells = base_conf
-
-        if conf is None:  # pragma: no cover
-            raise ValueError("ConfCells object must have a conf attribute")
-        # Not sure if need this, as assumption is to have 1 base image
-        self._is_plural = isinstance(conf, list)
-
-        if self._is_plural:  # pragma: no cover
-            self._base_conf = [VitessceConfig.from_dict(conf) for conf in conf]
-        else:
-            self._base_conf: VitessceConfig = VitessceConfig.from_dict(base_conf.conf)
-
-        self._epic_uuid = epic_uuid
+        self._get_entity = get_entity
+        self._parent_uuid = parent
         self._is_zarr_zip = False
-        self.base_image_metadata = base_image_metadata
         self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
 
-    def get_conf_cells(self):
-        self.apply()
-        if self._is_plural:  # pragma: no cover
-            return get_conf_cells([conf.to_dict() for conf in self._base_conf])
-        return get_conf_cells(self._base_conf)
+    def get_conf_cells(self, **kwargs):
+        """Generate Vitessce configuration for segmentation masks."""
+        # Get parent entity to extract base image information
+        if self._parent_uuid is None:
+            raise ValueError("SegmentationMaskBuilder requires a parent dataset")
 
-    def apply(self):
-        if self._is_plural:  # pragma: no cover
-            for conf in self._base_conf:
-                self._apply(conf)
-        else:
-            self._apply(self._base_conf)
+        if self._get_entity is None:
+            raise ValueError("SegmentationMaskBuilder requires get_entity callback")
 
-    @abstractmethod
-    def _apply(self, conf):  # pragma: no cover
-        pass
+        parent_entity = self._get_entity(self._parent_uuid)
 
-    def zarr_store_url(self):
-        adata_url = self._build_assets_url(zarr_path, use_token=False)
-        return adata_url
+        # Build base image configuration from parent
+        base_image_metadata = self._get_base_image_metadata(parent_entity)
+        base_image_url, base_offsets_url = self._get_base_image_urls(parent_entity)
 
-    def segmentations_ome_offset_url(self, img_path):
-        img_url = self._build_assets_url(f"{SEGMENTATION_SUBDIR}/{img_path}")
-        return (
-            img_url,
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "offsets.json",
-                    re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_url),
-                )
-            ),
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "metadata.json",
-                    re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, img_url),
-                )
-            ),
+        # Build the Vitessce configuration
+        vc = VitessceConfig(name="HuBMAP Data Portal", schema_version=self._schema_version)
+        dataset = vc.add_dataset(name="Segmentation Masks")
+
+        # Add base image from parent
+        dataset = dataset.add_object(
+            ImageOmeTiffWrapper(
+                img_url=base_image_url,
+                offsets_url=base_offsets_url,
+                name="Base Image",
+                coordination_values={"fileUid": "base-image"},
+            )
         )
 
-
-class SegmentationMaskBuilder(EPICConfBuilder):
-    def _apply(self, conf):
+        # Add segmentation mask overlays
         zarr_url = self.zarr_store_url()
-        datasets = conf.get_datasets()
         file_paths_found = [file["rel_path"] for file in self._entity["files"]]
+
         if any(".zarr.zip" in path for path in file_paths_found):
             self._is_zarr_zip = True
+
         found_images = list(
             get_matches(
                 file_paths_found,
                 IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
             )
         )
+
         # Remove the base-image pyramids from the found_images
         filtered_images = [img_path for img_path in found_images if SEGMENTATION_SUPPORT_IMAGE_SUBDIR not in img_path]
+
         if len(filtered_images) == 0:  # pragma: no cover
-            message = f"Image pyramid assay with uuid {self._uuid} has no matching files"
+            message = f"Segmentation mask dataset with uuid {self._uuid} has no matching files"
             raise FileNotFoundError(message)
 
         if len(filtered_images) >= 1:
             img_url, offsets_url, metadata_url = self.segmentations_ome_offset_url(filtered_images[0])
-        segmentation_metadata = get_image_metadata(self, metadata_url)
 
-        segmentation_scale = get_image_scale(self.base_image_metadata, segmentation_metadata)
+        segmentation_metadata = get_image_metadata(self, metadata_url)
+        segmentation_scale = get_image_scale(base_image_metadata, segmentation_metadata)
+
         segmentations = ObsSegmentationsOmeTiffWrapper(
             img_url=img_url,
             offsets_url=offsets_url,
@@ -126,17 +104,20 @@ class SegmentationMaskBuilder(EPICConfBuilder):
             coordination_values={"fileUid": "segmentation-mask"},
         )
 
-        mask_names = self.read_metadata_from_url()
-        if mask_names is not None:  # pragma: no cover
-            segmentation_objects, segmentations_CL = create_segmentation_objects(self, zarr_url, mask_names)
-            for dataset in datasets:
-                dataset.add_object(segmentations)
-                for obj in segmentation_objects:
-                    dataset.add_object(obj)
+        dataset = dataset.add_object(segmentations)
 
-            spatial_view = conf.get_first_view_by_type("spatialBeta")
-            lc_view = conf.get_first_view_by_type("layerControllerBeta")
-            conf.link_views_by_dict(
+        # Add Zarr-based segmentation objects if available
+        mask_names = self.read_metadata_from_url()
+        if mask_names:  # pragma: no cover
+            segmentation_objects, segmentations_CL = create_segmentation_objects(self, zarr_url, mask_names)
+            for obj in segmentation_objects:
+                dataset.add_object(obj)
+
+            # Configure views and coordination
+            spatial_view = vc.add_view("spatialBeta", dataset=dataset)
+            lc_view = vc.add_view("layerControllerBeta", dataset=dataset)
+
+            vc.link_views_by_dict(
                 [spatial_view, lc_view],
                 {
                     # Neutralizing the base-image colors
@@ -161,6 +142,119 @@ class SegmentationMaskBuilder(EPICConfBuilder):
                 meta=True,
                 scope_prefix=get_initial_coordination_scope_prefix("A", "obsSegmentations"),
             )
+
+            vc.layout(spatial_view | lc_view)
+        else:
+            # No Zarr segmentations, simpler layout
+            spatial_view = vc.add_view("spatialBeta", dataset=dataset)
+            lc_view = vc.add_view("layerControllerBeta", dataset=dataset)
+            vc.layout(spatial_view | lc_view)
+
+        return get_conf_cells(vc)
+
+    def _get_base_image_metadata(self, parent_entity):
+        """Extract base image metadata from parent dataset."""
+        # Find base image file in parent
+        parent_files = parent_entity.get("files", [])
+        parent_file_paths = [file["rel_path"] for file in parent_files]
+
+        # Look for image pyramids, excluding segmentation masks
+        # Pattern allows for optional prefixes like "extras/transformations/"
+        found_images = list(
+            get_matches(
+                parent_file_paths,
+                r".*" + IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
+            )
+        )
+        # Filter out segmentation mask files (contain "segmentation" in filename)
+        filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
+
+        if not filtered_images:  # pragma: no cover
+            raise FileNotFoundError(f"Parent dataset {self._parent_uuid} has no base images")
+
+        # Get metadata for first image (optional - may not be available in tests)
+        metadata_path = re.sub(
+            r"ome\.tiff?",
+            "metadata.json",
+            re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, filtered_images[0]),
+        )
+
+        # Check if metadata file exists in parent files
+        if metadata_path in parent_file_paths:
+            # Build URL for parent's metadata using parent UUID
+            metadata_url = f"{self._assets_endpoint}/{self._parent_uuid}/{metadata_path}"
+            if self._groups_token:
+                metadata_url += f"?token={self._groups_token}"
+
+            try:
+                return get_image_metadata(self, metadata_url)
+            except (FileNotFoundError, Exception):  # pragma: no cover
+                # Metadata not available, return empty dict
+                return {}
+        else:
+            # Metadata file not in parent entity files
+            return {}
+
+    def _get_base_image_urls(self, parent_entity):
+        """Get base image and offsets URLs from parent dataset."""
+        parent_files = parent_entity.get("files", [])
+        parent_file_paths = [file["rel_path"] for file in parent_files]
+
+        # Look for image pyramids, excluding segmentation masks
+        # Pattern allows for optional prefixes like "extras/transformations/"
+        found_images = list(
+            get_matches(
+                parent_file_paths,
+                r".*" + IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
+            )
+        )
+        # Filter out segmentation mask files (contain "segmentation" in filename)
+        filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
+
+        if not filtered_images:  # pragma: no cover
+            raise FileNotFoundError(f"Parent dataset {self._parent_uuid} has no base images")
+
+        img_path = filtered_images[0]
+
+        # Build URLs for parent's image using parent UUID
+        img_url = f"{self._assets_endpoint}/{self._parent_uuid}/{img_path}"
+        if self._groups_token:
+            img_url += f"?token={self._groups_token}"
+
+        offsets_path = re.sub(
+            r"ome\.tiff?",
+            "offsets.json",
+            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
+        )
+        offsets_url = f"{self._assets_endpoint}/{self._parent_uuid}/{offsets_path}"
+        if self._groups_token:
+            offsets_url += f"?token={self._groups_token}"
+
+        return img_url, offsets_url
+
+    def zarr_store_url(self):
+        adata_url = self._build_assets_url(zarr_path, use_token=False)
+        return adata_url
+
+    def segmentations_ome_offset_url(self, img_path):
+        img_url = self._build_assets_url(f"{SEGMENTATION_SUBDIR}/{img_path}")
+        return (
+            img_url,
+            str(
+                re.sub(
+                    r"ome\.tiff?",
+                    "offsets.json",
+                    re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_url),
+                )
+            ),
+            str(
+                re.sub(
+                    r"ome\.tiff?",
+                    "metadata.json",
+                    re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, img_url),
+                )
+            ),
+        )
 
     def read_metadata_from_url(self):  # pragma: no cover
         mask_names = []

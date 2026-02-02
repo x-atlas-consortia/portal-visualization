@@ -26,9 +26,7 @@ try:
     import yaml
     import zarr
 
-    from src.portal_visualization.builders.base_builders import ConfCells
     from src.portal_visualization.builders.imaging_builders import KaggleSegImagePyramidViewConfBuilder
-    from src.portal_visualization.epic_factory import get_epic_builder
     from src.portal_visualization.paths import IMAGE_PYRAMID_DIR
     from src.portal_visualization.utils import get_found_images, read_zip_zarr
 
@@ -162,11 +160,7 @@ for path in good_entity_paths:
 def test_has_visualization(has_vis_entity):
     has_vis, entity = has_vis_entity
     parent = entity.get("parent") or None  # Only used for image pyramids
-    hints = entity.get("vitessce-hints", [])
-    epic_uuid = (  # For segmentation masks
-        entity.get("uuid") if "epic" in hints and len(hints) > 1 else None
-    )
-    assert has_vis == has_visualization(entity, get_entity, parent, epic_uuid)
+    assert has_vis == has_visualization(entity, get_entity, parent)
 
 
 def is_annotated_entity(entity_path):
@@ -1156,7 +1150,7 @@ def generate_seqfish_test_cases():
 
 
 def generate_epic_seg_test_cases():
-    """Generate EpicSegImagePyramidViewConfBuilder test cases programmatically."""
+    """Generate SegmentationMaskBuilder test cases programmatically."""
     from .fixtures import make_entity
 
     test_cases = []
@@ -1164,7 +1158,7 @@ def generate_epic_seg_test_cases():
     # Standard zarr variant
     test_cases.append(
         (
-            "EpicSegImagePyramidViewConfBuilder/generated-fake",
+            "SegmentationMaskBuilder/generated-fake",
             make_entity(
                 uuid="df7cac7cb67a822f7007b57c4d8f5e7d",
                 status="QA",
@@ -1198,7 +1192,7 @@ def generate_epic_seg_test_cases():
     # Zarr.zip variant
     test_cases.append(
         (
-            "EpicSegImagePyramidViewConfBuilder/generated-fake-zarr-zip",
+            "SegmentationMaskBuilder/generated-fake-zarr-zip",
             make_entity(
                 uuid="df7cac7cb67a822f7007b57c4d8f5e7d-zip",
                 status="QA",
@@ -1369,16 +1363,11 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
     # Mock the zarr store
     mock_zarr_store(entity_path, mocker, 5)
 
-    # Get parent and epic_uuid from entity for builder selection
+    # Get parent from entity for builder selection
     parent = entity.get("parent") or None  # Only used for image pyramids
-    epic_uuid = None
-    hints = entity.get("vitessce-hints", [])
-    is_object_by_analyte = "epic" in hints and len(hints) == 1
-    if "epic" in hints and not is_object_by_analyte:
-        epic_uuid = entity.get("uuid")
 
     # Get builder
-    Builder = get_view_config_builder(entity, get_entity, parent, epic_uuid)
+    Builder = get_view_config_builder(entity, get_entity, parent)
     expected_builder = test_id.split("/")[0]
     assert Builder.__name__ == expected_builder
 
@@ -1393,8 +1382,9 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
     # Extract minimal from test_id if present
     minimal = "minimal" in test_id
 
-    # Build configuration
-    builder = Builder(entity, groups_token, assets_url, minimal=minimal)
+    # Build configuration - pass parent and get_entity for builders that need them
+    parent_uuid = entity.get("parent", {}).get("uuid") if entity.get("parent") else None
+    builder = Builder(entity, groups_token, assets_url, get_entity=get_entity, parent=parent_uuid, minimal=minimal)
     conf, cells = builder.get_conf_cells(marker=marker)
 
     # Special case: NullViewConfBuilder returns None
@@ -1402,36 +1392,7 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
         assert conf is None
         return
 
-    # Handle EPIC builders (segmentation masks, etc.)
-    hints = entity.get("vitessce-hints", [])
-    is_object_by_analyte = "epic" in hints and len(hints) == 1
-    if "epic" in hints and not is_object_by_analyte:
-        from src.portal_visualization.epic_factory import get_epic_builder
-
-        epic_builder = get_epic_builder(epic_uuid)
-        assert epic_builder is not None
-        if conf is None:  # pragma: no cover
-            with pytest.raises(ValueError):  # noqa: PT011
-                epic_builder(
-                    epic_uuid,
-                    ConfCells(conf, cells),
-                    entity,
-                    groups_token,
-                    assets_url,
-                    builder.base_image_metadata,  # type: ignore
-                ).get_conf_cells()
-            return
-
-        built_epic_conf, cells = epic_builder(
-            epic_uuid,
-            ConfCells(conf, cells),
-            entity,
-            groups_token,
-            assets_url,
-            builder.base_image_metadata,  # type: ignore
-        ).get_conf_cells()
-        assert built_epic_conf is not None
-        conf = built_epic_conf
+    # EPIC builders now handle everything internally, no wrapper needed
 
     # Basic validation - should produce valid config
     assert conf is not None
@@ -1458,60 +1419,20 @@ def test_entity_to_vitessce_conf(entity_path, mocker):
 
     possible_marker = entity_path.name.split("-")[-2]
     marker = possible_marker.split("=")[1] if possible_marker.startswith("marker=") else None
-    epic_uuid = None
     entity = json.loads(entity_path.read_text())
     parent = entity.get("parent") or None  # Only used for image pyramids
-    assay_type = get_entity(entity["uuid"])
 
-    is_object_by_analyte = "epic" in assay_type["vitessce-hints"] and len(assay_type["vitessce-hints"]) == 1
-
-    # If "epic" is the only hint, it's object by analyte and doesn't need a parent UUID
-    # Otherwise, it's a segmentation mask
-    if "epic" in assay_type["vitessce-hints"] and not is_object_by_analyte:
-        epic_uuid = entity.get("uuid")
-
-    Builder = get_view_config_builder(entity, get_entity, parent, epic_uuid)
-    # Envvars should not be set during normal test runs,
-    # but to test the end-to-end integration, they are useful.
-    # epic_uuid = environ.get("EPIC_UUID", "epic_uuid")
+    Builder = get_view_config_builder(entity, get_entity, parent)
     # Check if this is a minimal test case
     minimal = "minimal" in entity_path.name
-    builder = Builder(entity, groups_token, assets_url, minimal=minimal)
+    builder = Builder(entity, groups_token, assets_url, get_entity=get_entity, parent=parent, minimal=minimal)
     conf, cells = builder.get_conf_cells(marker=marker)
 
     # Uncomment to generate a fixture
     # print(json.dumps(conf, indent=2))
 
-    if "epic" not in assay_type["vitessce-hints"] or is_object_by_analyte:
-        assert Builder.__name__ == entity_path.parent.name
-        compare_confs(entity_path, conf, cells)
-    elif "epic" in assay_type["vitessce-hints"]:
-        epic_builder = get_epic_builder(epic_uuid)
-        assert epic_builder is not None
-        assert epic_builder.__name__ == entity_path.parent.name
-        if conf is None:  # pragma: no cover
-            with pytest.raises(ValueError):  # noqa: PT011
-                epic_builder(
-                    epic_uuid,
-                    ConfCells(conf, cells),
-                    entity,
-                    groups_token,
-                    assets_url,
-                    builder.base_image_metadata,  # type: ignore
-                ).get_conf_cells()
-            return
-
-        built_epic_conf, cells = epic_builder(
-            epic_uuid,
-            ConfCells(conf, cells),
-            entity,
-            groups_token,
-            assets_url,
-            builder.base_image_metadata,  # type: ignore
-        ).get_conf_cells()
-        assert built_epic_conf is not None
-
-        compare_confs(entity_path, built_epic_conf, cells)
+    assert Builder.__name__ == entity_path.parent.name
+    compare_confs(entity_path, conf, cells)
 
 
 @pytest.mark.parametrize("entity_path", bad_entity_paths, ids=lambda path: path.name)

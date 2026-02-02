@@ -11,7 +11,6 @@ from werkzeug.exceptions import HTTPException
 
 from .builder_factory import get_view_config_builder
 from .builders.base_builders import ConfCells
-from .epic_factory import get_epic_builder
 from .utils import files_from_response
 
 Entity = namedtuple("Entity", ["uuid", "type", "name"], defaults=["TODO: name"])
@@ -187,9 +186,7 @@ class ApiClient:
         response_json = self._request(self.elasticsearch_url, body_json=query)
         return files_from_response(response_json)
 
-    def get_vitessce_conf_cells_and_lifted_uuid(
-        self, entity, marker=None, wrap_error=True, parent=None, epic_uuid=None, minimal=False
-    ):
+    def get_vitessce_conf_cells_and_lifted_uuid(self, entity, marker=None, wrap_error=True, parent=None, minimal=False):
         """
         Returns a dataclass with vitessce_conf and is_lifted.
         """
@@ -211,7 +208,7 @@ class ApiClient:
             if metadata.get("files"):  # pragma: no cover  # We have separate tests for the builder logic
                 derived_entity["files"] = metadata.get("files", [])
                 vitessce_conf = self.get_vitessce_conf_cells_and_lifted_uuid(
-                    derived_entity, marker=marker, wrap_error=wrap_error, parent=entity, epic_uuid=epic_uuid
+                    derived_entity, marker=marker, wrap_error=wrap_error, parent=entity
                 ).vitessce_conf
                 vis_lifted_uuid = derived_entity["uuid"]
             else:  # no files
@@ -235,20 +232,21 @@ class ApiClient:
                         return self.get_entity(uuid=entity)
                     return self.get_entity(uuid=entity.get("uuid"))
 
-                Builder = get_view_config_builder(entity, get_entity, parent, epic_uuid)
-                builder = Builder(entity, self.groups_token, self.assets_endpoint, minimal=minimal)
+                Builder = get_view_config_builder(entity, get_entity, parent)
+                builder = Builder(
+                    entity,
+                    self.groups_token,
+                    self.assets_endpoint,
+                    get_entity=get_entity,
+                    parent=parent,
+                    minimal=minimal,
+                )
                 vitessce_conf = builder.get_conf_cells(marker=marker)
             except Exception as e:
                 if not wrap_error:
                     raise e
                 current_app.logger.error(f"Building vitessce conf threw error: {traceback.format_exc()}")
                 vitessce_conf = _create_vitessce_error(str(e))
-
-        if epic_uuid is not None and vitessce_conf.conf is not None:  # pragma: no cover  # TODO
-            EPICBuilder = get_epic_builder(epic_uuid)
-            vitessce_conf = EPICBuilder(
-                epic_uuid, vitessce_conf, entity, self.groups_token, self.assets_endpoint, builder.base_image_metadata
-            ).get_conf_cells()
 
         return VitessceConfLiftedUUID(vitessce_conf=vitessce_conf, vis_lifted_uuid=vis_lifted_uuid)
 
