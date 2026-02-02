@@ -259,7 +259,7 @@ Examples:
         print()
 
         builder_name = _get_builder_name(
-            entity={"vitessce-hints": hints, "soft_assaytype": assay_type},
+            entity={"uuid": "test-uuid", "vitessce-hints": hints, "soft_assaytype": assay_type},
             get_entity=None,
             parent="dummy" if has_parent else None,
             epic_uuid="dummy" if has_epic else None,
