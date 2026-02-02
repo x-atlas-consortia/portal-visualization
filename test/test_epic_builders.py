@@ -22,10 +22,10 @@ def test_segmentation_mask_builder_requires_parent():
     }
 
     # Should fail without parent
+    builder = SegmentationMaskBuilder(
+        entity, groups_token="token", assets_endpoint="https://example.com", get_entity=None, parent=None
+    )
     with pytest.raises(ValueError, match="SegmentationMaskBuilder requires a parent"):
-        builder = SegmentationMaskBuilder(
-            entity, groups_token="token", assets_endpoint="https://example.com", get_entity=None, parent=None
-        )
         builder.get_conf_cells()
 
 
