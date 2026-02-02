@@ -247,9 +247,7 @@ class BuilderRegistry:
 
             # Check parent assay type
             if reg.parent_assay_types is not None and parent_assay_type not in reg.parent_assay_types:
-                reasons.append(
-                    f"parent_assay_type '{parent_assay_type}' not in {sorted(reg.parent_assay_types)}"
-                )
+                reasons.append(f"parent_assay_type '{parent_assay_type}' not in {sorted(reg.parent_assay_types)}")
 
             # Check parent requirement
             if reg.requires_parent and not has_parent:
@@ -423,7 +421,7 @@ def populate_registry():
         {
             "builder": "KaggleSegImagePyramidViewConfBuilder",
             "description": "Kaggle segmentation masks (non-EPIC) with parent",
-            "required_hints": ["segmentation_mask"],
+            "required_hints": ["pyramid", "is_image", "segmentation_mask"],
             "requires_parent": True,
             "forbidden_hints": ["epic"],
             "priority": PRIORITY_SPECIFIC + 15,
@@ -431,7 +429,7 @@ def populate_registry():
         {
             "builder": "SegmentationMaskBuilder",
             "description": "EPIC segmentation mask support datasets",
-            "required_hints": ["is_support"],
+            "required_hints": ["pyramid", "epic", "is_image", "segmentation_mask"],
             "requires_epic": True,
             "priority": PRIORITY_SPECIFIC + 10,
         },
