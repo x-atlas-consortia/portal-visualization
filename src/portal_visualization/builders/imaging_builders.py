@@ -7,7 +7,6 @@ from vitessce import (
     MultiImageWrapper,
     ObsSegmentationsOmeTiffWrapper,
     OmeTiffWrapper,
-    VitessceConfig,
     get_initial_coordination_scope_prefix,
 )
 from vitessce import (
@@ -48,6 +47,7 @@ GEOMX_IMAGE_VIEW_TYPE = "geomx-seg"
 
 class AbstractImagingViewConfBuilder(ViewConfBuilder):
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
+        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
         self.image_pyramid_regex = None
         self.seg_image_pyramid_regex = None
         self.use_full_resolution = []
@@ -55,7 +55,6 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         self.view_type = BASE_IMAGE_VIEW_TYPE
         self.base_image_metadata = None
         self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
-        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
 
     def _get_img_and_offset_url(self, img_path, img_dir):
         """Create a url for the offsets and img.
@@ -139,7 +138,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         filtered_images = [img for img in found_images if not any(subdir in img for subdir in base_image_dirs)]
 
         if not filtered_images:
-            raise FileNotFoundError(f"Segmentation assay with uuid {self._uuid} has no matching files")
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing segmentation image pyramid files")
 
         img_url, offsets_url, metadata_url = self._get_img_and_offset_url(
             filtered_images[0], self.seg_image_pyramid_regex
@@ -304,11 +303,11 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         found_images = get_found_images(self.image_pyramid_regex, file_paths_found)
         found_images = sorted(found_images)
         if len(found_images) == 0:  # pragma: no cover
-            message = f"Image pyramid assay with uuid {self._uuid} has no matching files"
-            raise FileNotFoundError(message)
+            raise FileNotFoundError(
+                f"Dataset {self._uuid} is missing image pyramid files matching {self.image_pyramid_regex}"
+            )
 
-        vc = VitessceConfig(name="HuBMAP Data Portal", schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="Visualization Files")
+        vc, dataset = self._create_vitessce_config(dataset_name="Visualization Files")
 
         if "seg" in self.view_type:
             img_url, offsets_url, metadata_url = get_img_and_offset_url_func(found_images[0], self.image_pyramid_regex)
@@ -476,8 +475,7 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
         full_seqfish_regex = "/".join([IMAGE_PYRAMID_DIR, SEQFISH_HYB_CYCLE_REGEX, SEQFISH_FILE_REGEX])
         found_images = get_matches(file_paths_found, full_seqfish_regex)
         if len(found_images) == 0:
-            message = f"seqFish assay with uuid {self._uuid} has no matching files"
-            raise FileNotFoundError(message)
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing seqFish hybridization cycle image files")
         # Get all files grouped by PosN names.
         images_by_pos = group_by_file_name(found_images)
         confs = []
@@ -485,8 +483,7 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
         for images in images_by_pos:
             image_wrappers = []
             pos_name = self._get_pos_name(images[0])
-            vc = VitessceConfig(name=pos_name, schema_version=self._schema_version)
-            dataset = vc.add_dataset(name=pos_name)
+            vc, dataset = self._create_vitessce_config(name=pos_name, dataset_name=pos_name)
             sorted_images = sorted(images, key=self._get_hybcycle)
             for img_path in sorted_images:
                 img_url, offsets_url, _ = self._get_img_and_offset_url(img_path, IMAGE_PYRAMID_DIR)

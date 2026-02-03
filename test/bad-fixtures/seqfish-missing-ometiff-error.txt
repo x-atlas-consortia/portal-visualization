@@ -1,1 +1,1 @@
-FileNotFoundError: seqFish assay with uuid 9db61adfc017670a196ea9b3ca1852a0 has no matching files
+FileNotFoundError: Dataset 9db61adfc017670a196ea9b3ca1852a0 is missing seqFish hybridization cycle image files

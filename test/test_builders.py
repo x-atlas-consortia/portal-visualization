@@ -26,7 +26,10 @@ try:
     import yaml
     import zarr
 
-    from src.portal_visualization.builders.imaging_builders import KaggleSegImagePyramidViewConfBuilder
+    from src.portal_visualization.builders.imaging_builders import (
+        EpicSegImagePyramidViewConfBuilder,
+        KaggleSegImagePyramidViewConfBuilder,
+    )
     from src.portal_visualization.paths import IMAGE_PYRAMID_DIR
     from src.portal_visualization.utils import get_found_images, read_zip_zarr
 
@@ -1526,7 +1529,7 @@ def test_filtered_images_not_found(mock_seg_image_pyramid_builder):
     try:
         mock_seg_image_pyramid_builder._add_segmentation_image(None)
     except FileNotFoundError as e:
-        assert str(e) == f"Segmentation assay with uuid {mock_seg_image_pyramid_builder._uuid} has no matching files"  # noqa: PT017
+        assert str(e) == f"Dataset {mock_seg_image_pyramid_builder._uuid} is missing segmentation image pyramid files"  # noqa: PT017
 
 
 @pytest.mark.requires_full

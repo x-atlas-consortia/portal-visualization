@@ -140,7 +140,7 @@ Usage:
 ```
 usage: vis-preview [-h] (--url URL | --json JSON) [--assets_url URL]
                    [--token TOKEN] [--marker MARKER] [--to_json]
-                   [--epic_uuid UUID] [--parent_uuid UUID]
+                   [--parent_uuid UUID]
 
 Given HuBMAP Dataset JSON, generate a Vitessce viewconf, and load vitessce.io.
 
@@ -154,7 +154,6 @@ options:
   --marker MARKER     Marker to highlight in visualization; Only used in some
                       visualizations.
   --to_json           Output viewconf, rather than open in browser.
-  --epic_uuid UUID    uuid of the EPIC dataset.
   --parent_uuid UUID  Parent uuid - Only needed for an image-pyramid support
                       dataset.
 ```

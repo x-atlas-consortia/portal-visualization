@@ -6,7 +6,6 @@ from vitessce import (
     CoordinationType,
     MultiImageWrapper,
     OmeTiffWrapper,
-    VitessceConfig,
 )
 from vitessce import (
     Component as cm,
@@ -15,7 +14,6 @@ from vitessce import (
     FileType as ft,
 )
 
-from ..data_access import create_zarr_accessor
 from ..paths import (
     CODEX_TILE_DIR,
     IMAGE_PYRAMID_DIR,
@@ -115,8 +113,7 @@ class SPRMJSONViewConfBuilder(SPRMViewConfBuilder):
 
     def get_conf_cells(self, **kwargs):
         found_image_file = self._check_sprm_image(self._get_full_image_path())
-        vc = VitessceConfig(name=self._base_name, schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="SPRM")
+        vc, dataset = self._create_vitessce_config(name=self._base_name, dataset_name="SPRM")
         image_wrapper = self._get_ometiff_image_wrapper(found_image_file, self._imaging_path_regex)
         dataset = dataset.add_object(image_wrapper)
         file_paths_found = self._get_file_paths()
@@ -128,9 +125,10 @@ class SPRMJSONViewConfBuilder(SPRMViewConfBuilder):
             # This tile has segmentations so show the analysis results.
             for file in self._files:
                 path = file["rel_path"]
-                if path not in file_paths_found:
-                    message = f'SPRM file {path} with uuid "{self._uuid}" not found as expected.'
-                    raise FileNotFoundError(message)
+                try:
+                    self._require_file(path, f"SPRM file {path}")
+                except FileNotFoundError:
+                    raise
                 dataset_file = self._replace_url_in_file(file)
                 dataset = dataset.add_file(**(dataset_file))
             vc = self._setup_view_config_raster_cellsets_expression_segmentation(vc, dataset)
@@ -165,8 +163,6 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         self._image_name = kwargs["image_name"]
         self._imaging_path_regex = f"{self.image_pyramid_regex}/{kwargs['imaging_path']}"
         self._mask_path_regex = f"{self.image_pyramid_regex}/{kwargs['mask_path']}"
-        self._is_zarr_zip = False
-        self._zarr_accessor = create_zarr_accessor(self)
 
     def zarr_store(self):
         zarr_path = f"anndata-zarr/{self._image_name}-anndata.zarr"
@@ -185,17 +181,18 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         )
 
     def get_conf_cells(self, marker=None):
-        vc = VitessceConfig(name=self._image_name, schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="SPRM")
+        vc, dataset = self._create_vitessce_config(name=self._image_name, dataset_name="SPRM")
         file_paths_found = self._get_file_paths()
         zarr_path = f"anndata-zarr/{self._image_name}-anndata.zarr"
         # Use the group as a proxy for presence of the rest of the zarr store.
         if f"{zarr_path}.zip" in file_paths_found:  # pragma: no cover
             self._is_zarr_zip = True
             zarr_path = f"{zarr_path}.zip"
-        elif f"{zarr_path}/.zgroup" not in file_paths_found:  # pragma: no cover
-            message = f"SPRM assay with uuid {self._uuid} has no .zarr store at {zarr_path}"
-            raise FileNotFoundError(message)
+        else:  # pragma: no cover
+            try:
+                self._require_file(f"{zarr_path}/.zgroup", f"a .zarr store at {zarr_path}")
+            except FileNotFoundError:
+                raise
         adata_url = self._build_assets_url(zarr_path, use_token=False)
 
         additional_cluster_names = list(self.zarr_store().get("uns/cluster_columns", []))

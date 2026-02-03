@@ -1,1 +1,1 @@
-FileNotFoundError: SPRM assay with uuid 04e7385339167e541ad42a2636e18398 has no .zarr store at anndata-zarr/reg1_stitched_expressions-anndata.zarr
+FileNotFoundError: Dataset 04e7385339167e541ad42a2636e18398 is missing a .zarr store at anndata-zarr/reg1_stitched_expressions-anndata.zarr

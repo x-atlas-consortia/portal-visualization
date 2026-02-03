@@ -6,7 +6,6 @@ from vitessce import (
     AnnDataWrapper,
     ImageOmeTiffWrapper,
     ObsSegmentationsOmeTiffWrapper,
-    VitessceConfig,
     get_initial_coordination_scope_prefix,
 )
 from vitessce import CoordinationLevel as CL
@@ -37,7 +36,6 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         super().__init__(entity, groups_token, assets_endpoint, **kwargs)
         self._get_entity = get_entity
         self._parent_uuid = parent
-        self._is_zarr_zip = False
         self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
 
     def get_conf_cells(self, **kwargs):
@@ -56,8 +54,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         base_image_url, base_offsets_url = self._get_base_image_urls(parent_entity)
 
         # Build the Vitessce configuration
-        vc = VitessceConfig(name="HuBMAP Data Portal", schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="Segmentation Masks")
+        vc, dataset = self._create_vitessce_config(dataset_name="Segmentation Masks")
 
         # Add base image from parent
         dataset = dataset.add_object(
@@ -73,8 +70,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         zarr_url = self.zarr_store_url()
         file_paths_found = [file["rel_path"] for file in self._entity["files"]]
 
-        if any(".zarr.zip" in path for path in file_paths_found):
-            self._is_zarr_zip = True
+        self._detect_zarr_format()
 
         found_images = list(
             get_matches(
@@ -87,8 +83,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         filtered_images = [img_path for img_path in found_images if SEGMENTATION_SUPPORT_IMAGE_SUBDIR not in img_path]
 
         if len(filtered_images) == 0:  # pragma: no cover
-            message = f"Segmentation mask dataset with uuid {self._uuid} has no matching files"
-            raise FileNotFoundError(message)
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing segmentation mask pyramid files")
 
         if len(filtered_images) >= 1:
             img_url, offsets_url, metadata_url = self.segmentations_ome_offset_url(filtered_images[0])
@@ -170,7 +165,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
 
         if not filtered_images:  # pragma: no cover
-            raise FileNotFoundError(f"Parent dataset {self._parent_uuid} has no base images")
+            raise FileNotFoundError(f"Dataset {self._parent_uuid} is missing base image pyramid files (parent dataset)")
 
         # Get metadata for first image (optional - may not be available in tests)
         metadata_path = re.sub(
@@ -212,7 +207,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
 
         if not filtered_images:  # pragma: no cover
-            raise FileNotFoundError(f"Parent dataset {self._parent_uuid} has no base images")
+            raise FileNotFoundError(f"Dataset {self._parent_uuid} is missing base image pyramid files (parent dataset)")
 
         img_path = filtered_images[0]
 

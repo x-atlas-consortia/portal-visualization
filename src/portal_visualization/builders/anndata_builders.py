@@ -39,7 +39,6 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         # Spatially resolved RNA-seq assays require some special handling,
         # and others do not.
         self._is_spatial = False
-        self._is_zarr_zip = False
         self._spatial_w = 0
         self._obs_set_paths = None
         self._obs_set_names = None
@@ -51,17 +50,6 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         self._is_annotated = None
         self._scatterplot_w = None
         self._scatterplot_h = None
-
-    @cached_property
-    def _zarr_accessor(self):
-        """Get ZarrStoreAccessor instance for this builder."""
-        return create_zarr_accessor(self)
-
-    @cached_property
-    def zarr_store(self):
-        """Open the Zarr store using ZarrStoreAccessor."""
-        zarr_path = ZIP_ZARR_PATH if self._is_zarr_zip else ZARR_PATH
-        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     @cached_property
     def has_marker_genes(self):
@@ -148,9 +136,11 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         # Use .zgroup file as proxy for whether or not the zarr store is present.
         if f"{ZARR_PATH}.zip" in file_paths_found:
             self._is_zarr_zip = True
-        elif f"{ZARR_PATH}/.zgroup" not in file_paths_found:
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {ZARR_PATH}"
-            raise FileNotFoundError(message)
+        else:
+            try:
+                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
+            except FileNotFoundError:
+                raise
         self._is_annotated = self.is_annotated
         if self._scatterplot_w is None:
             self._scatterplot_w = self.compute_scatterplot_w()
@@ -158,7 +148,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
             self._scatterplot_h = self.compute_scatterplot_h()
         self._set_up_marker_gene(marker)
         self._set_up_obs_labels()
-        vc = VitessceConfig(name=self._uuid, schema_version=self._schema_version)
+        vc, _ = self._create_vitessce_config()
         dataset = self._set_up_dataset(vc)
         vc = self._setup_anndata_view_config(vc, dataset)
         vc = self._link_marker_gene(vc)
@@ -559,9 +549,11 @@ class SpatialMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewCon
             self._is_zarr_zip = True
             zarr_path = ZIP_ZARR_PATH
 
-        elif f"{ZARR_PATH}/.zgroup" not in file_paths_found:  # pragma: no cover
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {ZARR_PATH}"
-            raise FileNotFoundError(message)
+        else:  # pragma: no cover
+            try:
+                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
+            except FileNotFoundError:
+                raise
         adata_url = self._build_assets_url(zarr_path, use_token=False)
         image_url = self._build_assets_url("ometiff-pyramids/visium_histology_hires_pyramid.ome.tif", use_token=True)
         offsets_url = self._build_assets_url(
@@ -609,11 +601,12 @@ class XeniumMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewConf
                 self._is_zarr_zip = True
             zarr_path = f"{zarr_path}.zip"
 
-        elif (
-            self._is_zarr_zip is False or self._is_spatial_zarr_zip is False
-        ) and f"{zarr_path}/.zgroup" not in file_paths_found:  # pragma: no cover
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {zarr_path}"
-            raise FileNotFoundError(message)
+        else:  # pragma: no cover
+            if self._is_zarr_zip is False or self._is_spatial_zarr_zip is False:
+                try:
+                    self._require_file(f"{zarr_path}/.zgroup", f"a .zarr store at {zarr_path}")
+                except FileNotFoundError:
+                    raise
         return self._build_assets_url(zarr_path, use_token=False)
 
     def _set_xenium_datasets(self, vc, adata_url, spatial_data_url):
@@ -846,7 +839,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         )
 
         for column_name, column_label, multivec_label in cluster_columns:
-            vc = VitessceConfig(name=f"{column_label}", schema_version=self._schema_version)
+            vc, _ = self._create_vitessce_config(name=f"{column_label}")
             dataset = self._set_up_dataset(vc, multivec_label)
             vc = self._setup_anndata_view_config(vc, dataset, column_name, column_label)
             vc = self._link_marker_gene(vc)

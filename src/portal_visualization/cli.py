@@ -22,7 +22,6 @@ def main():  # pragma: no cover
     # Import heavy dependencies only when CLI is actually run
     try:
         from portal_visualization.builder_factory import get_view_config_builder
-        from portal_visualization.epic_factory import get_epic_builder
     except ImportError as e:
         print(
             "ERROR: The vis-preview CLI requires the [full] installation.\n"
@@ -49,7 +48,6 @@ def main():  # pragma: no cover
     parser.add_argument("--token", help="Globus groups token; Only needed if data is not public", default="")
     parser.add_argument("--marker", help="Marker to highlight in visualization; Only used in some visualizations.")
     parser.add_argument("--to_json", action="store_true", help="Output viewconf, rather than open in browser.")
-    parser.add_argument("--epic_uuid", metavar="UUID", help="uuid of the EPIC dataset.", default=None)
     parser.add_argument(
         "--parent_uuid",
         metavar="UUID",
@@ -59,7 +57,6 @@ def main():  # pragma: no cover
 
     args = parser.parse_args()
     marker = args.marker
-    epic_uuid = args.epic_uuid
     parent_uuid = args.parent_uuid
 
     headers = get_headers(args.token)
@@ -78,18 +75,10 @@ def main():  # pragma: no cover
 
     # conf = client.get_vitessce_conf_cells_and_lifted_uuid(entity, None, True, parent_uuid, epic_uuid).vitessce_conf
 
-    Builder = get_view_config_builder(entity, get_entity, parent_uuid, epic_uuid)
+    Builder = get_view_config_builder(entity, get_entity, parent_uuid)
     builder = Builder(entity, args.token, args.assets_url)
     print(f"Using: {builder.__class__.__name__}", file=stderr)
     conf_cells = builder.get_conf_cells(marker=marker)
-
-    if epic_uuid is not None and conf_cells is not None:  # pragma: no cover
-        EpicBuilder = get_epic_builder(epic_uuid)
-        epic_builder = EpicBuilder(
-            epic_uuid, conf_cells, entity, args.token, args.assets_url, builder.base_image_metadata
-        )
-        print(f"Using: {epic_builder.__class__.__name__}", file=stderr)
-        conf_cells = epic_builder.get_conf_cells()
 
     conf_as_json = json.dumps(conf_cells.conf[0]) if isinstance(conf_cells.conf, list) else json.dumps(conf_cells.conf)
 

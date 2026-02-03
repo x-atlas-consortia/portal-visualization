@@ -4,9 +4,6 @@ from vitessce import (
 from vitessce import (
     FileType as ft,
 )
-from vitessce import (
-    VitessceConfig,
-)
 
 from ..paths import SCATAC_SEQ_DIR, SCRNA_SEQ_DIR
 from ..utils import create_coordination_values, get_conf_cells
@@ -22,17 +19,13 @@ class AbstractScatterplotViewConfBuilder(ViewConfBuilder):
 
     def get_conf_cells(self, **kwargs):
         file_paths_expected = [file["rel_path"] for file in self._files]
-        file_paths_found = self._get_file_paths()
         # We need to check that the files we expect actually exist.
         # This is due to the volatility of the datasets.
-        if not set(file_paths_expected).issubset(set(file_paths_found)):
-            message = (
-                f'Files for uuid "{self._uuid}" not found as expected: '
-                f"Expected: {file_paths_expected}; Found: {file_paths_found}"
-            )
-            raise FileNotFoundError(message)
-        vc = VitessceConfig(name="HuBMAP Data Portal", schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="Visualization Files")
+        try:
+            self._require_files(file_paths_expected, f"scatterplot files: {file_paths_expected}")
+        except FileNotFoundError:
+            raise
+        vc, dataset = self._create_vitessce_config(dataset_name="Visualization Files")
         # The sublcass initializes _files in its __init__ method
         for file in self._files:
             dataset = dataset.add_file(**(self._replace_url_in_file(file)))
