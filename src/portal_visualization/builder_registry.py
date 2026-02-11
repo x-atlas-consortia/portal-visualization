@@ -386,7 +386,7 @@ def populate_registry():
     - Maintains string-based registration (no imports)
 
     Example usage:
-        populate_legacy_registry()
+        populate_registry()
         # Registry now contains all builder mappings
     """
     # Import assay constants that actually exist
