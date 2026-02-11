@@ -301,8 +301,8 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None):
     hints = entity.get("vitessce-hints", [])
     assay_type = entity.get("soft_assaytype")
     has_parent = parent is not None
-    # Detect EPIC datasets by checking for relevant hints
-    has_epic = "epic" in hints or "is_support" in hints or "segmentation_mask" in hints
+    # Detect EPIC datasets by checking for explicit EPIC hints
+    has_epic = "epic" in hints
 
     # Get parent assay type if parent exists
     parent_assay_type = None
