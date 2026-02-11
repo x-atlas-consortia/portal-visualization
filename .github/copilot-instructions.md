@@ -42,9 +42,9 @@ The system supports two approaches for selecting the appropriate builder:
 
 #### 1. Registry-Based Selection (New, Recommended)
 
-- **Entry point**: `builder_factory.get_view_config_builder(entity, get_entity, parent, epic_uuid)`
+- **Entry point**: `builder_factory.get_view_config_builder(entity, get_entity, parent=None)`
 - **Feature flag**: Set `USE_BUILDER_REGISTRY=1` environment variable to enable (experimental)
-- **Architecture**: Declarative configuration list in `builder_registry.py:populate_legacy_registry()`
+- **Architecture**: Declarative configuration list in `builder_registry.py:populate_registry()`
   - Each builder has a config dict with `required_hints`, `forbidden_hints`, `assay_types`, `parent_assay_types`, `priority`
   - Builders are registered via `_REGISTRY.register(builder_name, **config)`
   - Selection uses priority-based matching (higher priority wins when multiple match)
