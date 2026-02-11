@@ -86,13 +86,13 @@ def test_segmentation_mask_builder_with_parent(mocker):
 
 def test_segmentation_mask_builder_metadata_fallback():
     """Test that SegmentationMaskBuilder handles missing metadata files gracefully."""
-    # Parent entity without metadata files
+    # Parent entity with image pyramids but without metadata files
     parent_entity = {
         "uuid": "parent-uuid",
         "vitessce-hints": ["is_image"],
         "soft_assaytype": "CODEX",
         "files": [
-            {"rel_path": "stitched/expressions/expr_0.ome.tiff"},
+            {"rel_path": "stitched/ometiff-pyramids/expr_0.ome.tiff"},
             {"rel_path": "stitched/ome-tiff-offsets/expr_0_offsets.json"},
         ],
     }
@@ -116,5 +116,5 @@ def test_segmentation_mask_builder_metadata_fallback():
     )
 
     # Call internal method to test metadata fallback (returns empty dict when file not found)
-    metadata = builder._get_base_image_metadata("91706.segmentations", parent_entity)
+    metadata = builder._get_base_image_metadata(parent_entity)
     assert metadata == {}

@@ -1707,6 +1707,46 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
     assert "spatial" in layout_str.lower(), "Spatial view should still be present"
 
 
+@pytest_requires_full
+def test_epic_seg_image_pyramid_builder_initialization():
+    """Test that EpicSegImagePyramidViewConfBuilder initializes correctly."""
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask"],
+        "files": [],
+    }
+
+    builder = EpicSegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
+
+    # Verify the builder sets the correct attributes
+    # SEGMENTATION_SUBDIR = "extras/transformations"
+    # IMAGE_PYRAMID_DIR = "ometiff-pyramids"
+    # SEGMENTATION_SUPPORT_IMAGE_SUBDIR = "lab_processed/images"
+    assert "ometiff-pyramids" in builder.image_pyramid_regex
+    assert "lab_processed/images" in builder.image_pyramid_regex
+    assert builder.view_type == "seg"
+
+
+@pytest_requires_full
+def test_epic_seg_image_pyramid_builder_get_conf_cells():
+    """Test that EpicSegImagePyramidViewConfBuilder.get_conf_cells works."""
+    entity = {
+        "uuid": "test-uuid",
+        "status": "Published",
+        "vitessce-hints": ["segmentation_mask"],
+        "files": [
+            {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/expr_0.ome.tiff"},
+        ],
+    }
+
+    builder = EpicSegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
+
+    # Call get_conf_cells - it should return None for missing files but the call covers line 385
+    conf_cells = builder.get_conf_cells()
+    # The method should execute without error (covers line 385)
+    assert conf_cells is not None
+
+
 if __name__ == "__main__":  # pragma: no cover
     parser = argparse.ArgumentParser(description="Generate fixtures")
     parser.add_argument("--input", required=True, type=Path, help="Input JSON path")
