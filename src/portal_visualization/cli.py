@@ -251,7 +251,6 @@ Examples:
             entity={"uuid": "test-uuid", "vitessce-hints": hints, "soft_assaytype": assay_type},
             get_entity=None,
             parent="dummy" if has_parent else None,
-            epic_uuid="dummy" if has_epic else None,
         )
 
         print(f"✓ SELECTED BUILDER: {builder_name}")
