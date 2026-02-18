@@ -166,6 +166,8 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
     def zarr_store(self):
         zarr_path = f"anndata-zarr/{self._image_name}-anndata.zarr"
+        if self._is_zarr_zip:
+            zarr_path = f"{zarr_path}.zip"
         return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     def _get_bitmask_image_path(self):

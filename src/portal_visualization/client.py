@@ -240,6 +240,7 @@ class ApiClient:
                     get_entity=get_entity,
                     parent=parent,
                     minimal=minimal,
+                    find_support_entity=self.get_descendant_to_lift,
                 )
                 vitessce_conf = builder.get_conf_cells(marker=marker)
             except Exception as e:

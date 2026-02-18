@@ -58,6 +58,7 @@ def _lazy_import_builder(builder_name):
         GeoMxImagePyramidViewConfBuilder,
         ImagePyramidViewConfBuilder,
         IMSViewConfBuilder,
+        Kaggle1SegImagePyramidViewConfBuilder,
         KaggleSegImagePyramidViewConfBuilder,
         NanoDESIViewConfBuilder,
         SeqFISHViewConfBuilder,
@@ -86,6 +87,7 @@ def _lazy_import_builder(builder_name):
         "GeoMxImagePyramidViewConfBuilder": GeoMxImagePyramidViewConfBuilder,
         "ImagePyramidViewConfBuilder": ImagePyramidViewConfBuilder,
         "IMSViewConfBuilder": IMSViewConfBuilder,
+        "Kaggle1SegImagePyramidViewConfBuilder": Kaggle1SegImagePyramidViewConfBuilder,
         "KaggleSegImagePyramidViewConfBuilder": KaggleSegImagePyramidViewConfBuilder,
         "NanoDESIViewConfBuilder": NanoDESIViewConfBuilder,
         "SeqFISHViewConfBuilder": SeqFISHViewConfBuilder,
@@ -159,7 +161,7 @@ def get_view_config_builder(entity, get_entity, parent=None):
     :return: Builder class
     :rtype: type
     """
-    builder_name = _get_builder_name(entity, get_entity, parent)
+    builder_name = _get_builder_name_from_registry(entity, get_entity, parent)
     return _lazy_import_builder(builder_name)
 
 
@@ -212,7 +214,7 @@ def _get_builder_name(entity, get_entity, parent=None):
         if is_seg_mask and is_epic:
             return "SegmentationMaskBuilder"
         elif is_seg_mask:
-            return "KaggleSegImagePyramidViewConfBuilder"
+            return "Kaggle1SegImagePyramidViewConfBuilder"
 
         elif is_support and is_image:
             ancestor_assaytype = get_entity(parent).get("soft_assaytype")
@@ -236,6 +238,8 @@ def _get_builder_name(entity, get_entity, parent=None):
             return "NullViewConfBuilder"
 
     if is_image:
+        if is_seg_mask and not is_epic:
+            return "KaggleSegImagePyramidViewConfBuilder"
         if is_rna:
             # e.g. Visium (no probes) [Salmon + Scanpy]
             # sample entity (on dev): 72ec02cf1390428c1e9dc2c88928f5f5

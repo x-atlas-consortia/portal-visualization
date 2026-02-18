@@ -28,6 +28,7 @@ try:
 
     from src.portal_visualization.builders.imaging_builders import (
         EpicSegImagePyramidViewConfBuilder,
+        Kaggle1SegImagePyramidViewConfBuilder,
         KaggleSegImagePyramidViewConfBuilder,
     )
     from src.portal_visualization.paths import IMAGE_PYRAMID_DIR
@@ -138,6 +139,21 @@ def get_entity(input):
     return assay
 
 
+# Mock support entity for Kaggle-1 tests: provides base images from parent's support entity
+_kaggle1_support_entity = {
+    "uuid": "kaggle1-support-uuid",
+    "files": [
+        {"rel_path": "ometiff-pyramids/lab_processed/images/B001_SB-reg005.ome.tif"},
+        {"rel_path": "output_offsets/lab_processed/images/B001_SB-reg005.offsets.json"},
+        {"rel_path": "image_metadata/lab_processed/images/B001_SB-reg005.metadata.json"},
+    ],
+}
+
+
+def _mock_find_support_entity(uuid):
+    return _kaggle1_support_entity
+
+
 # Construct test cases for has_visualization.
 # Initial values are edge cases (null view conf builder)
 has_visualization_test_cases = [
@@ -154,6 +170,9 @@ for path in good_entity_paths:
         continue
     has_visualization_test_cases.append((True, entity))
 
+# NOTE: programmatic_test_cases (defined later) are added to
+# has_visualization_test_cases after they're generated; see code below programmatic_test_cases.
+
 
 @pytest.mark.parametrize(
     "has_vis_entity",
@@ -164,6 +183,11 @@ def test_has_visualization(has_vis_entity):
     has_vis, entity = has_vis_entity
     parent = entity.get("parent") or None  # Only used for image pyramids
     assert has_vis == has_visualization(entity, get_entity, parent)
+
+
+def test_has_visualization_no_uuid():
+    with pytest.raises(ValueError, match="does not have a uuid"):
+        has_visualization({}, get_entity)
 
 
 def is_annotated_entity(entity_path):
@@ -904,7 +928,7 @@ def generate_imaging_builder_test_cases():
         )
     )
 
-    # KaggleSegImagePyramidViewConfBuilder
+    # KaggleSegImagePyramidViewConfBuilder (Kaggle-2: base images co-located, no parent)
     test_cases.append(
         (
             "KaggleSegImagePyramidViewConfBuilder/generated-fake",
@@ -923,7 +947,6 @@ def generate_imaging_builder_test_cases():
                     {"rel_path": "image_metadata/B001_SB-reg005.segmentations.metadata.json"},
                 ],
                 immediate_ancestors=[{"data_types": ["Histology"]}],
-                parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
             ),
         )
     )
@@ -1074,6 +1097,30 @@ def generate_multi_image_sprm_test_cases():
                 data_types=["celldive_deepcell"],
                 hints=["is_tiled", "is_image", "anndata", "sprm"],
                 files=files,
+            ),
+        )
+    )
+
+    # Zip variant - tests that zarr_store() correctly appends .zip suffix
+    zip_files = [
+        {"rel_path": "anndata-zarr/reg001_S20030086_region_001_expr-anndata.zarr.zip"},
+        {"rel_path": "data.json"},
+        {"rel_path": "output_offsets/pipeline_output/expr/reg001_S20030086_region_001_expr.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/expr/reg001_S20030086_region_001_expr.ome.tif"},
+        {"rel_path": "output_offsets/pipeline_output/mask/reg001_S20030086_region_001_mask.offsets.json"},
+        {"rel_path": "ometiff-pyramids/pipeline_output/mask/reg001_S20030086_region_001_mask.ome.tif"},
+    ]
+
+    test_cases.append(
+        (
+            "MultiImageSPRMAnndataViewConfBuilder/generated-fake-zip-marker=gene123",
+            make_entity(
+                uuid="2b3e99536a7da4f78bf02a8b6ce92b30-zip",
+                status="Published",
+                soft_assaytype="celldive_deepcell",
+                data_types=["celldive_deepcell"],
+                hints=["is_tiled", "is_image", "anndata", "sprm"],
+                files=zip_files,
             ),
         )
     )
@@ -1229,6 +1276,60 @@ def generate_epic_seg_test_cases():
     return test_cases
 
 
+def generate_kaggle1_seg_test_cases():
+    """Generate Kaggle1SegImagePyramidViewConfBuilder test cases programmatically."""
+    from .fixtures import make_entity
+
+    test_cases = []
+
+    # Kaggle-1 (external): seg masks only, base images in parent's support entity
+    test_cases.append(
+        (
+            "Kaggle1SegImagePyramidViewConfBuilder/generated-fake",
+            make_entity(
+                uuid="kaggle1-seg-fake-uuid",
+                status="QA",
+                soft_assaytype="h-and-e",
+                data_types=["Histology"],
+                hints=["segmentation_mask", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/B001_SB-reg005.segmentations.ome.tif"},
+                    {"rel_path": "output_offsets/B001_SB-reg005.segmentations.offsets.json"},
+                    {"rel_path": "image_metadata/B001_SB-reg005.segmentations.metadata.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+                parent={"uuid": "kaggle1-parent-uuid"},
+            ),
+        )
+    )
+
+    # Kaggle-1 (co-located): base images AND seg masks both in entity files
+    test_cases.append(
+        (
+            "Kaggle1SegImagePyramidViewConfBuilder/generated-colocated",
+            make_entity(
+                uuid="kaggle1-seg-colocated-uuid",
+                status="QA",
+                soft_assaytype="h-and-e",
+                data_types=["Histology"],
+                hints=["segmentation_mask", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/VAN0052-RK-3-81-PAS.ome.tif"},
+                    {"rel_path": "output_offsets/lab_processed/images/VAN0052-RK-3-81-PAS.offsets.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/VAN0052-RK-3-81-PAS.metadata.json"},
+                    {"rel_path": "ometiff-pyramids/VAN0052-RK-3-81-PAS.ome_mask.ome.tif"},
+                    {"rel_path": "output_offsets/VAN0052-RK-3-81-PAS.ome_mask.offsets.json"},
+                    {"rel_path": "image_metadata/VAN0052-RK-3-81-PAS.ome_mask.metadata.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+                parent={"uuid": "kaggle1-parent-uuid"},
+            ),
+        )
+    )
+
+    return test_cases
+
+
 def generate_null_builder_test_cases():
     """Generate NullViewConfBuilder test cases programmatically."""
     from .fixtures import make_entity
@@ -1326,8 +1427,17 @@ programmatic_test_cases = (
     + generate_legacy_json_test_cases()
     + generate_seqfish_test_cases()
     + generate_epic_seg_test_cases()
+    + generate_kaggle1_seg_test_cases()
     + generate_null_builder_test_cases()
 )
+
+# Add programmatic test entities to has_visualization_test_cases
+for test_id, entity in programmatic_test_cases:
+    builder_name = test_id.split("/")[0]
+    if builder_name == "NullViewConfBuilder":
+        has_visualization_test_cases.append((False, entity))
+    elif entity.get("uuid") not in excluded_uuids:
+        has_visualization_test_cases.append((True, entity))
 
 
 @pytest.mark.requires_full
@@ -1396,7 +1506,21 @@ def test_programmatic_entity_to_vitessce_conf(test_id, entity, mocker):
 
     # Build configuration - pass parent and get_entity for builders that need them
     parent_uuid = entity.get("parent", {}).get("uuid") if entity.get("parent") else None
-    builder = Builder(entity, groups_token, assets_url, get_entity=get_entity, parent=parent_uuid, minimal=minimal)
+
+    # Provide mock find_support_entity for Kaggle-1 builder tests
+    find_support_entity = None
+    if "Kaggle1" in test_id:
+        find_support_entity = _mock_find_support_entity
+
+    builder = Builder(
+        entity,
+        groups_token,
+        assets_url,
+        get_entity=get_entity,
+        parent=parent_uuid,
+        minimal=minimal,
+        find_support_entity=find_support_entity,
+    )
     conf, cells = builder.get_conf_cells(marker=marker)
 
     # Special case: NullViewConfBuilder returns None
@@ -1454,11 +1578,9 @@ def test_entity_to_error(entity_path, mocker):
 
     entity = json.loads(entity_path.read_text())
 
-    # Registry returns NullViewConfBuilder for empty entities, which is valid
-    # Legacy code raises an exception
-    use_registry = environ.get("USE_BUILDER_REGISTRY") == "1"
-    if use_registry and entity == {}:
-        # Empty entity gets NullViewConfBuilder with registry
+    # get_view_config_builder always uses the registry, which returns
+    # NullViewConfBuilder for empty entities instead of raising an exception
+    if entity == {}:
         parent = entity.get("parent") or None
         Builder = get_view_config_builder(entity, get_entity, parent=parent)
         assert Builder.__name__ == "NullViewConfBuilder"
@@ -1509,7 +1631,7 @@ def mock_seg_image_pyramid_builder():
         def _get_file_paths(self):
             return []
 
-    # Use programmatic entity generation instead of loading from file
+    # Kaggle-2 entity: base images co-located, no parent
     entity = make_entity(
         uuid="23a25976beb8c02ab589b13a05b28c55",
         status="QA",
@@ -1525,7 +1647,6 @@ def mock_seg_image_pyramid_builder():
             {"rel_path": "image_metadata/B001_SB-reg005.segmentations.metadata.json"},
         ],
         immediate_ancestors=[{"data_types": ["Histology"]}],
-        parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
     )
     return MockBuilder(entity, groups_token, assets_url)
 
@@ -1754,6 +1875,187 @@ def test_epic_seg_image_pyramid_builder_get_conf_cells(mocker):
     conf_cells = builder.get_conf_cells()
     # The method should execute without error (covers line 385)
     assert conf_cells is not None
+
+
+@pytest_requires_full
+def test_kaggle1_builder_parent_as_dict(mocker):
+    """Test that Kaggle1 builder handles parent passed as full entity dict (as in client.py)."""
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [
+            {"rel_path": "ometiff-pyramids/seg.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/seg.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/seg.segmentations.metadata.json"},
+        ],
+    }
+
+    support_entity = {
+        "uuid": "support-uuid",
+        "files": [
+            {"rel_path": "ometiff-pyramids/lab_processed/images/base.ome.tif"},
+            {"rel_path": "output_offsets/lab_processed/images/base.offsets.json"},
+            {"rel_path": "image_metadata/lab_processed/images/base.metadata.json"},
+        ],
+    }
+
+    # Parent passed as dict (how client.py passes it)
+    parent_dict = {"uuid": "parent-uuid-123", "soft_assaytype": "PAS"}
+    called_with = []
+
+    def mock_find_support(uuid):
+        called_with.append(uuid)
+        return support_entity
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent=parent_dict,
+        find_support_entity=mock_find_support,
+    )
+    conf, cells = builder.get_conf_cells()
+    assert conf is not None
+    # Verify find_support_entity was called with the UUID string, not the dict
+    assert called_with == ["parent-uuid-123"]
+
+
+@pytest_requires_full
+def test_kaggle1_builder_no_parent():
+    """Test that Kaggle1 builder raises ValueError when parent is None."""
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [{"rel_path": "ometiff-pyramids/seg.ome.tif"}],
+    }
+    builder = Kaggle1SegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
+    with pytest.raises(ValueError, match="requires a parent dataset"):
+        builder.get_conf_cells()
+
+
+@pytest_requires_full
+def test_kaggle1_builder_metadata_files_fallback(mocker):
+    """Test that Kaggle1 builder falls back to metadata.files when files is missing."""
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [
+            {"rel_path": "ometiff-pyramids/seg.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/seg.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/seg.segmentations.metadata.json"},
+        ],
+    }
+
+    # Support entity with files in metadata (not top-level)
+    support_entity = {
+        "uuid": "support-meta-uuid",
+        "metadata": {
+            "files": [
+                {"rel_path": "ometiff-pyramids/lab_processed/images/base.ome.tif"},
+                {"rel_path": "output_offsets/lab_processed/images/base.offsets.json"},
+                {"rel_path": "image_metadata/lab_processed/images/base.metadata.json"},
+            ]
+        },
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: support_entity,
+    )
+    conf, cells = builder.get_conf_cells()
+    assert conf is not None
+    assert "datasets" in conf
+
+
+@pytest_requires_full
+def test_kaggle1_builder_no_images_in_support():
+    """Test that Kaggle1 builder raises FileNotFoundError when support entity has no images."""
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [{"rel_path": "ometiff-pyramids/seg.ome.tif"}],
+    }
+
+    # Support entity with no ome.tif files
+    support_entity = {
+        "uuid": "support-empty-uuid",
+        "files": [{"rel_path": "some/other/file.json"}],
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: support_entity,
+    )
+    with pytest.raises(FileNotFoundError, match="missing base image pyramid files"):
+        builder.get_conf_cells()
+
+
+@pytest_requires_full
+def test_kaggle1_builder_no_support_entity():
+    """Test that Kaggle1 builder raises ValueError when find_support_entity returns None."""
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [{"rel_path": "ometiff-pyramids/seg.ome.tif"}],
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: None,
+    )
+    with pytest.raises(ValueError, match="could not find support entity"):
+        builder.get_conf_cells()
+
+
+@pytest_requires_full
+def test_kaggle1_builder_no_token(mocker):
+    """Test Kaggle1 builder URL generation without auth token."""
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [
+            {"rel_path": "ometiff-pyramids/seg.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/seg.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/seg.segmentations.metadata.json"},
+        ],
+    }
+
+    support_entity = {
+        "uuid": "support-uuid",
+        "files": [
+            {"rel_path": "ometiff-pyramids/lab_processed/images/base.ome.tif"},
+            {"rel_path": "output_offsets/lab_processed/images/base.offsets.json"},
+            {"rel_path": "image_metadata/lab_processed/images/base.metadata.json"},
+        ],
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token=None,
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: support_entity,
+    )
+    conf, cells = builder.get_conf_cells()
+    assert conf is not None
+    # Verify URLs don't have token parameter
+    datasets = conf.get("datasets", [])
+    assert len(datasets) > 0
 
 
 if __name__ == "__main__":  # pragma: no cover

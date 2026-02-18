@@ -1,0 +1,5 @@
+{
+  "uuid": "kaggle1-seg-colocated-uuid",
+  "soft_assaytype": "h-and-e",
+  "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"]
+}

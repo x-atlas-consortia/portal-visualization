@@ -88,16 +88,16 @@ class ZarrStoreAccessor:
     def open_store(self, is_zip: bool = False, zarr_path: str | None = None):
         """Open a Zarr store.
 
-        Args:
-            is_zip: Whether the store is zip-compressed
-            zarr_path: Custom path (defaults to self.zarr_path or self.zip_zarr_path)
+                Args:
+                    is_zip: Whether the store is zip-compressed
+                    zarr_path: Custom path (defaults to self.zarr_path or self.zip_zarr_path)
+        reg
+                Returns:
+                    Opened Zarr store or None on error
 
-        Returns:
-            Opened Zarr store or None on error
-
-        >>> # Requires zarr package - tested in full install mode
-        >>> # Example usage:
-        >>> # store = accessor.open_store(is_zip=False)
+                >>> # Requires zarr package - tested in full install mode
+                >>> # Example usage:
+                >>> # store = accessor.open_store(is_zip=False)
         """
         if not _FULL_DEPS_AVAILABLE:  # pragma: no cover
             raise RuntimeError("Zarr dependencies not available. Install with: pip install portal-visualization[full]")
@@ -107,6 +107,7 @@ class ZarrStoreAccessor:
 
         if is_zip:
             zarr_url = self._url_builder(path, use_token=True)
+
             try:
                 return read_zip_zarr(zarr_url, request_init)
             except Exception as e:  # pragma: no cover
