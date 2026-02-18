@@ -185,7 +185,7 @@ Examples:
         has_epic = args.has_epic
     else:
         # Load from JSON
-        entity = get_entity(args.url, args.json, args.token)
+        entity = get_entity_from_args(args.url, args.json, args.token)
         hints = entity.get("vitessce-hints", [])
         assay_type = entity.get("soft_assaytype")
         parent_assay_type = args.parent_assay_type
