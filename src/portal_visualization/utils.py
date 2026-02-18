@@ -5,8 +5,8 @@ from unicodedata import normalize
 
 import fsspec
 import nbformat
+import requests
 import zarr
-from requests import get
 from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
@@ -121,7 +121,7 @@ def get_image_metadata(self, img_url):
 
     meta_data = None
     request_init = self._get_request_init() or {}
-    response = get(img_url, **request_init)
+    response = requests.get(img_url, **request_init)
     if response.status_code == 200:  # pragma: no cover
         data = response.json()
         if isinstance(data, dict) and "PhysicalSizeX" in data and "PhysicalSizeUnitX" in data:

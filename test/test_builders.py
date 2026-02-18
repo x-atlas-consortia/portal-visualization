@@ -329,6 +329,15 @@ def mock_zarr_store(entity_path, mocker, obs_count):
         mock_response.raise_for_status.return_value = None
         mocker.patch("requests.get", return_value=mock_response)
 
+    # Mock image metadata retrieval (used by imaging builders, harmless for others)
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+    mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
+    # Mock read_metadata_from_url (SegmentationMaskBuilder fetches zarr metadata over HTTP)
+    mocker.patch(
+        "src.portal_visualization.builders.epic_builders.SegmentationMaskBuilder.read_metadata_from_url",
+        return_value=[],
+    )
+
     # Apply mocks
     mocker.patch("zarr.open", return_value=z)
     if is_zip_entity(entity_path):
@@ -1726,7 +1735,7 @@ def test_epic_seg_image_pyramid_builder_initialization():
 
 
 @pytest_requires_full
-def test_epic_seg_image_pyramid_builder_get_conf_cells():
+def test_epic_seg_image_pyramid_builder_get_conf_cells(mocker):
     """Test that EpicSegImagePyramidViewConfBuilder.get_conf_cells works."""
     entity = {
         "uuid": "test-uuid",
@@ -1736,6 +1745,8 @@ def test_epic_seg_image_pyramid_builder_get_conf_cells():
             {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/expr_0.ome.tiff"},
         ],
     }
+
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
 
     builder = EpicSegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
 

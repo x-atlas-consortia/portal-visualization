@@ -431,7 +431,6 @@ def populate_registry():
             "description": "EPIC segmentation mask support datasets",
             "required_hints": ["pyramid", "epic", "is_image", "segmentation_mask"],
             "requires_epic": True,
-            "requires_parent": True,
             "priority": PRIORITY_SPECIFIC + 10,
         },
         # ============================================================
