@@ -6,8 +6,11 @@ HTTP endpoints, image metadata) to reduce code duplication across builders and
 improve testability.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import zarr
@@ -88,16 +91,16 @@ class ZarrStoreAccessor:
     def open_store(self, is_zip: bool = False, zarr_path: str | None = None):
         """Open a Zarr store.
 
-                Args:
-                    is_zip: Whether the store is zip-compressed
-                    zarr_path: Custom path (defaults to self.zarr_path or self.zip_zarr_path)
-        reg
-                Returns:
-                    Opened Zarr store or None on error
+        Args:
+            is_zip: Whether the store is zip-compressed
+            zarr_path: Custom path (defaults to self.zarr_path or self.zip_zarr_path)
 
-                >>> # Requires zarr package - tested in full install mode
-                >>> # Example usage:
-                >>> # store = accessor.open_store(is_zip=False)
+        Returns:
+            Opened Zarr store or None on error
+
+        >>> # Requires zarr package - tested in full install mode
+        >>> # Example usage:
+        >>> # store = accessor.open_store(is_zip=False)
         """
         if not _FULL_DEPS_AVAILABLE:  # pragma: no cover
             raise RuntimeError("Zarr dependencies not available. Install with: pip install portal-visualization[full]")
@@ -111,7 +114,7 @@ class ZarrStoreAccessor:
             try:
                 return read_zip_zarr(zarr_url, request_init)
             except Exception as e:  # pragma: no cover
-                print(f"Error opening the zip zarr file. {e}")
+                logger.error("Error opening the zip zarr file. %s", e)
                 return None
         else:
             zarr_url = self._url_builder(path, use_token=False)
@@ -159,7 +162,7 @@ class ImageMetadataRetriever:
         try:
             return self.resource_loader.load_json(metadata_url)
         except Exception as e:  # pragma: no cover
-            print(f"Error fetching metadata from {metadata_url}: {e}")
+            logger.error("Error fetching metadata from %s: %s", metadata_url, e)
             return None
 
     def compute_scale(self, base_metadata: dict[str, Any] | None, overlay_metadata: dict[str, Any] | None) -> float:

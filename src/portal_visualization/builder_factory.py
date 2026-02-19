@@ -1,17 +1,13 @@
-import os
+import logging
 import warnings
 
-from .assays import MALDI_IMS, NANODESI, SALMON_RNASSEQ_SLIDE, SEQFISH
 from .builder_registry import get_registry, populate_registry
 from .builders.base_builders import NullViewConfBuilder
 
+logger = logging.getLogger(__name__)
+
 # Initialize the registry on module import
 _registry_initialized = False
-
-# Feature flag to enable new registry-based builder selection
-# Set USE_BUILDER_REGISTRY=1 environment variable to opt-in (experimental)
-# Note: Registry is not yet a complete replacement for legacy logic
-USE_BUILDER_REGISTRY = os.environ.get("USE_BUILDER_REGISTRY", "0") == "1"
 
 
 def _ensure_registry_initialized():
@@ -108,9 +104,22 @@ def _lazy_import_builder(builder_name):
         raise ValueError(f"Unknown builder: {builder_name}")
 
 
-# This function processes the hints and returns a tuple of booleans
-# indicating which builder to use for the given entity.
+# This function processes the hints and returns a tuple of booleans.
+# Part of the public API (exported via __init__.py).
 def process_hints(hints):
+    """Process vitessce-hints into a tuple of boolean flags.
+
+    :param list hints: List of vitessce-hints from entity
+    :return: Tuple of boolean flags for each hint type
+    :rtype: tuple
+
+    >>> process_hints(["is_image", "rna"])[0]
+    True
+    >>> process_hints(["rna"])[0]
+    False
+    >>> process_hints(None)[0]
+    False
+    """
     if not hints:
         hints = []
     hints = set(hints)
@@ -145,10 +154,6 @@ def process_hints(hints):
     )
 
 
-# This function is the main entrypoint for the builder factory.
-# It returns the correct builder for the given entity.
-#
-# The entity is a dict that contains the entity UUID and metadata.
 def get_view_config_builder(entity, get_entity, parent=None):
     """Get the appropriate builder class for an entity.
 
@@ -165,8 +170,8 @@ def get_view_config_builder(entity, get_entity, parent=None):
     return _lazy_import_builder(builder_name)
 
 
-def _get_builder_name(entity, get_entity, parent=None):
-    """Get the name of the appropriate builder for an entity.
+def _get_builder_name_from_registry(entity, get_entity, parent=None):
+    """Get the name of the appropriate builder for an entity using the registry.
 
     This is the core decision logic that doesn't require importing heavy dependencies.
     Returns the builder class name as a string.
@@ -176,128 +181,11 @@ def _get_builder_name(entity, get_entity, parent=None):
     :param str parent: Parent entity UUID if this is a support dataset
     :return: Builder class name
     :rtype: str
-    """
-    # Use new registry-based system if enabled (experimental)
-    if USE_BUILDER_REGISTRY:
-        return _get_builder_name_from_registry(entity, get_entity, parent)
 
-    # Legacy implementation (default) - fully tested and reliable
-    if entity.get("uuid") is None:
-        raise ValueError("Provided entity does not have a uuid")
-    assay_name = entity.get("soft_assaytype")
-    hints = entity.get("vitessce-hints", [])
-    (
-        is_image,
-        is_rna,
-        is_atac,
-        is_sprm,
-        is_codex,
-        is_anndata,
-        is_json,
-        is_spatial,
-        is_support,
-        is_seg_mask,
-        is_geomx,
-        is_xenium,
-        is_epic,
-    ) = process_hints(hints)
-
-    # 'epic" is the only hint for object x analyte EPICs
-    if is_epic and len(hints) == 1:
-        return "ObjectByAnalyteConfBuilder"
-
-    # vis-lifted image pyramids
-    if parent is not None:
-        # Segmentation masks - check for epic hint to determine which builder
-        # EPIC segmentation masks have "epic" hint (new standalone builder)
-        # Kaggle masks don't have "epic" hint (old legacy builder)
-        if is_seg_mask and is_epic:
-            return "SegmentationMaskBuilder"
-        elif is_seg_mask:
-            return "Kaggle1SegImagePyramidViewConfBuilder"
-
-        elif is_support and is_image:
-            ancestor_assaytype = get_entity(parent).get("soft_assaytype")
-            if ancestor_assaytype == SEQFISH:
-                # e.g. parent  = c6a254b2dc2ed46b002500ade163a7cc
-                # e.g. support = 9db61adfc017670a196ea9b3ca1852a0
-                return "SeqFISHViewConfBuilder"
-            elif ancestor_assaytype == MALDI_IMS:
-                # e.g. parent  = 3bc3ad124014a632d558255626bf38c9
-                # e.g. support = a6116772446f6d1c1f6b3d2e9735cfe0
-                return "IMSViewConfBuilder"
-            elif ancestor_assaytype == NANODESI:
-                # e.g. parent  = 6b93107731199733f266bbd0f3bc9747
-                # e.g. support = e1c4370da5523ab5c9be581d1d76ca20
-                return "NanoDESIViewConfBuilder"
-            else:
-                # e.g. parent  = 8adc3c31ca84ec4b958ed20a7c4f4919
-                # e.g. support = f9ae931b8b49252f150d7f8bf1d2d13f
-                return "ImagePyramidViewConfBuilder"
-        else:
-            return "NullViewConfBuilder"
-
-    if is_image:
-        if is_seg_mask and not is_epic:
-            return "KaggleSegImagePyramidViewConfBuilder"
-        if is_rna:
-            # e.g. Visium (no probes) [Salmon + Scanpy]
-            # sample entity (on dev): 72ec02cf1390428c1e9dc2c88928f5f5
-            return "SpatialMultiomicAnnDataZarrViewConfBuilder"
-        if is_sprm and is_anndata:
-            # e.g. CellDIVE [DeepCell + SPRM]
-            # sample entity: c3be5650e93907b68ddbdb22b948db32
-            return "MultiImageSPRMAnndataViewConfBuilder"
-        if is_codex:
-            if is_json:
-                # legacy JSON-based dataset, e.g. b69d1e2ad1bf1455eee991fce301b191
-                return "TiledSPRMViewConfBuilder"
-            # e.g. CODEX [Cytokit + SPRM]
-            # sample entity: 43213991a54ce196d406707ffe2e86bd
-            return "StitchedCytokitSPRMViewConfBuilder"
-        if is_geomx:
-            return "GeoMxImagePyramidViewConfBuilder"
-        if is_xenium:
-            return "XeniumMultiomicAnnDataZarrViewConfBuilder"
-    if is_rna:
-        # multiomic mudata, e.g. 10x Multiome, SNARE-Seq, etc.
-        # e.g. 272789a950b2b5d4b9387a1cf66ad487 on dev
-        if is_atac:
-            return "MultiomicAnndataZarrViewConfBuilder"
-        if is_json:
-            # e.g. c019a1cd35aab4d2b4a6ff221e92aaab
-            return "RNASeqViewConfBuilder"
-        # if not JSON, assume that the entity is AnnData-backed
-        # TODO - once "anndata" hint is added to the hints for this assay, use that instead
-        if assay_name == SALMON_RNASSEQ_SLIDE:
-            # e.g. 2a590db3d7ab1e1512816b165d95cdcf
-            return "SpatialRNASeqAnnDataZarrViewConfBuilder"
-        # e.g. e65175561b4b17da5352e3837aa0e497
-        return "RNASeqAnnDataZarrViewConfBuilder"
-    if is_atac:
-        # e.g. d4493657cde29702c5ed73932da5317c
-        return "ATACSeqViewConfBuilder"
-
-    # any entity with no hints, e.g. 2c2179ea741d3bbb47772172a316a2bf
-    return "NullViewConfBuilder"
-
-
-def _get_builder_name_from_registry(entity, get_entity, parent=None):
-    """Get builder name using the registry system.
-
-    This is the new implementation that uses the builder registry instead of
-    the monolithic conditional logic. It's kept separate to allow gradual
-    migration and comparison with the legacy implementation.
-
-    :param dict entity: Entity response from search index
-    :param callable get_entity: Function to retrieve entity by UUID
-    :param str parent: Parent entity UUID if this is a support dataset
-    :return: Builder class name
-    :rtype: str
-
-    >>> entity = {"uuid": "test", "vitessce-hints": ["is_image", "rna", "spatial"]}
-    >>> _get_builder_name_from_registry(entity, None)
+    >>> _get_builder_name_from_registry({"uuid": "test", "vitessce-hints": ["is_image", "rna"]}, None)
     'SpatialMultiomicAnnDataZarrViewConfBuilder'
+    >>> _get_builder_name_from_registry({"uuid": "test", "vitessce-hints": []}, None)
+    'NullViewConfBuilder'
     """
     _ensure_registry_initialized()
     registry = get_registry()
@@ -352,6 +240,13 @@ def has_visualization(entity, get_entity, parent=None):
     :param str parent: Parent entity UUID if this is a support dataset
     :return: True if the entity has a visualization, False otherwise
     :rtype: bool
+
+    >>> has_visualization({"uuid": "test", "vitessce-hints": ["rna"]}, lambda x: {})
+    True
+    >>> has_visualization({"uuid": "test", "vitessce-hints": []}, lambda x: {})
+    False
     """
-    builder_name = _get_builder_name(entity, get_entity, parent)
+    if entity.get("uuid") is None:
+        raise ValueError("Provided entity does not have a uuid")
+    builder_name = _get_builder_name_from_registry(entity, get_entity, parent)
     return builder_name != "NullViewConfBuilder"

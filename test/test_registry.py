@@ -1,21 +1,18 @@
-"""Tests for experimental builder registry feature.
+"""Tests for builder registry.
 
-These tests cover the registry code paths when USE_BUILDER_REGISTRY=1.
-The registry is experimental and not used in production.
+These tests cover the registry code paths used for builder selection.
 """
-
-from unittest.mock import patch
 
 import pytest
 
 
 @pytest.mark.requires_full
 class TestRegistryExperimental:
-    """Test experimental registry-based builder selection."""
+    """Test registry-based builder selection."""
 
-    def test_registry_enabled_with_matching_builder(self):
-        """Test registry path when USE_BUILDER_REGISTRY=1 with a match."""
-        from portal_visualization.builder_factory import _get_builder_name
+    def test_registry_with_matching_builder(self):
+        """Test registry returns correct builder for known hints."""
+        from portal_visualization.builder_factory import _get_builder_name_from_registry
 
         entity = {
             "uuid": "test-uuid",
@@ -23,16 +20,13 @@ class TestRegistryExperimental:
             "vitessce-hints": ["is_image", "codex"],
         }
 
-        # Enable registry
-        with patch("portal_visualization.builder_factory.USE_BUILDER_REGISTRY", 1):
-            # Line 183: Registry call when enabled
-            builder_name = _get_builder_name(entity, lambda x: entity, None)
+        builder_name = _get_builder_name_from_registry(entity, lambda x: entity, None)
 
-            # Should get a builder from registry
-            assert builder_name is not None
-            assert builder_name != "NullViewConfBuilder"
+        # Should get a builder from registry
+        assert builder_name is not None
+        assert builder_name != "NullViewConfBuilder"
 
-    def test_registry_enabled_with_no_match(self):
+    def test_registry_with_no_match(self):
         """Test registry fallback to NullViewConfBuilder when no match."""
         from portal_visualization.builder_factory import _get_builder_name_from_registry
 

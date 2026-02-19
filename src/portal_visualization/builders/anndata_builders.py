@@ -434,7 +434,7 @@ class SpatialRNASeqAnnDataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         )
         visium_spots = AnnDataWrapper(
             adata_url=adata_url,
-            iz_zip=self._is_zarr_zip,
+            is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
             obs_set_paths=self._obs_set_paths,
             obs_set_names=self._obs_set_names,
@@ -622,7 +622,7 @@ class XeniumMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewConf
         )
         visium_spots = AnnDataWrapper(
             adata_url=adata_url,
-            iz_zip=self._is_zarr_zip,
+            is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
             obs_set_paths=self._obs_set_paths,
             obs_set_names=self._obs_set_names,

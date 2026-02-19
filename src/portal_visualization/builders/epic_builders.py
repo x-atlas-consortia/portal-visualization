@@ -1,3 +1,4 @@
+import logging
 import random
 import re
 
@@ -10,7 +11,6 @@ from vitessce import (
 )
 from vitessce import CoordinationLevel as CL
 
-from ..data_access import ImageMetadataRetriever, create_http_resource_loader
 from ..paths import (
     IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
@@ -21,6 +21,8 @@ from ..paths import (
 )
 from ..utils import get_conf_cells, get_image_metadata, get_image_scale, get_matches
 from .base_builders import ViewConfBuilder
+
+logger = logging.getLogger(__name__)
 
 zarr_path = f"{SEGMENTATION_SUBDIR}/{SEGMENTATION_ZARR_STORES}"
 
@@ -36,7 +38,6 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         super().__init__(entity, groups_token, assets_endpoint, **kwargs)
         self._get_entity = get_entity
         self._parent_uuid = parent
-        self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
 
     def get_conf_cells(self, **kwargs):
         """Generate Vitessce configuration for segmentation masks."""
@@ -261,10 +262,10 @@ class SegmentationMaskBuilder(ViewConfBuilder):
             if isinstance(data, dict) and "mask_names" in data:
                 mask_names = data["mask_names"]
             else:
-                print("'mask_names' key not found in the response.")
+                logger.warning("'mask_names' key not found in the response.")
         else:
             # in this case, the code won't execute for this
-            print(f"Failed to retrieve metadata.json: {response.status_code} - {response.reason}")
+            logger.warning("Failed to retrieve metadata.json: %s - %s", response.status_code, response.reason)
         return mask_names
 
 

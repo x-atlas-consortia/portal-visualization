@@ -1,3 +1,4 @@
+import logging
 import re
 from itertools import groupby
 from pathlib import Path
@@ -11,6 +12,8 @@ from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
 from .constants import image_units
+
+logger = logging.getLogger(__name__)
 
 
 def get_matches(files, regex):
@@ -105,7 +108,6 @@ def get_found_images_all(file_paths_found):
 def get_image_metadata(self, img_url):
     """
     Retrieve metadata from an image URL.
-    >>> import builtins
     >>> from unittest.mock import Mock, patch
     >>> mock_instance = Mock()
     >>> mock_instance._get_request_init.return_value = {}
@@ -113,10 +115,8 @@ def get_image_metadata(self, img_url):
     >>> mock_response.status_code = 404
     >>> mock_response.reason = 'Not Found'
     >>> with patch('requests.get', return_value=mock_response):
-    ...     with patch.object(builtins, 'print') as mock_print:
-    ...         result = get_image_metadata(mock_instance, 'https://example.com/image')
-    ...         mock_print.assert_called_with(f"Failed to retrieve https://example.com/image: 404 - Not Found")
-    ...         assert result is None
+    ...     result = get_image_metadata(mock_instance, 'https://example.com/image')
+    ...     assert result is None
     """
 
     meta_data = None
@@ -127,9 +127,9 @@ def get_image_metadata(self, img_url):
         if isinstance(data, dict) and "PhysicalSizeX" in data and "PhysicalSizeUnitX" in data:
             meta_data = data
         else:
-            print("Image does not have metadata")
+            logger.warning("Image does not have metadata")
     else:
-        print(f"Failed to retrieve {img_url}: {response.status_code} - {response.reason}")
+        logger.warning("Failed to retrieve %s: %s - %s", img_url, response.status_code, response.reason)
     return meta_data
 
 
@@ -145,27 +145,21 @@ def get_image_scale(base_metadata, seg_metadata):
         list: A list containing the scale factors for x, y, while keeping others unchanged (as 1).
 
     Doctest:
-    >>> from unittest.mock import Mock, patch
-    >>> import builtins
     >>> base_metadata = { \
         'PhysicalSizeX': 50, 'PhysicalSizeY': 100, 'PhysicalSizeUnitX': 'mm', 'PhysicalSizeUnitY': 'mm' \
     }
     >>> seg_metadata = { \
         'PhysicalSizeX': 25, 'PhysicalSizeY': 50, 'PhysicalSizeUnitX': 'mm', 'PhysicalSizeUnitY': 'mm' \
     }
-    >>> with patch('builtins.print') as mock_print:
-    ...     scale = get_image_scale(base_metadata, seg_metadata)
-    ...     mock_print.assert_called_with("Scaling factor: ", [2.0, 2.0, 1, 1, 1])
-    ...     assert scale == [2.0, 2.0, 1, 1, 1]  # Ensure the return value is also correct
+    >>> scale = get_image_scale(base_metadata, seg_metadata)
+    >>> assert scale == [2.0, 2.0, 1, 1, 1]
 
     >>> base_metadata = { \
         'PhysicalSizeX': 50, 'PhysicalSizeY': 100, 'PhysicalSizeUnitX': 'mm', 'PhysicalSizeUnitY': 'mm' \
     }
     >>> seg_metadata = None
-    >>> with patch('builtins.print') as mock_print:
-    ...     scale = get_image_scale(base_metadata, seg_metadata)
-    ...     mock_print.assert_called_with("Scaling factor: ", [1, 1, 1, 1, 1])
-    ...     assert scale == [1, 1, 1, 1, 1]  # Ensure the return value is also correct
+    >>> scale = get_image_scale(base_metadata, seg_metadata)
+    >>> assert scale == [1, 1, 1, 1, 1]
     """
 
     scale = [1, 1, 1, 1, 1]
@@ -186,8 +180,8 @@ def get_image_scale(base_metadata, seg_metadata):
 
         scale = [round(scale_x, 5), round(scale_y, 5), 1, 1, 1]
     else:
-        print("PhysicalSize units are not correct")
-    print("Scaling factor: ", scale)
+        logger.warning("PhysicalSize units are not correct")
+    logger.debug("Scaling factor: %s", scale)
     return scale
 
 

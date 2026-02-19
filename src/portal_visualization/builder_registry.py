@@ -601,6 +601,6 @@ def populate_registry():
 
     # Register all builders from the configuration list
     for config in builder_configs:
-        builder_name = config.pop("builder")
-        _ = config.pop("description", None)  # Remove description (documentation only, not used in registration)
-        _REGISTRY.register(builder_name, **config)
+        # Copy to avoid mutating the original config dicts (allows safe re-calls)
+        reg_kwargs = {k: v for k, v in config.items() if k not in ("builder", "description")}
+        _REGISTRY.register(config["builder"], **reg_kwargs)

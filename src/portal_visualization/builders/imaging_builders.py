@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 
@@ -17,7 +18,6 @@ from vitessce import (
 )
 
 from ..constants import base_image_dirs
-from ..data_access import ImageMetadataRetriever, create_http_resource_loader
 from ..paths import (
     GEOMX_DIR,
     IMAGE_METADATA_DIR,
@@ -39,6 +39,8 @@ from ..utils import (
 )
 from .base_builders import ViewConfBuilder
 
+logger = logging.getLogger(__name__)
+
 BASE_IMAGE_VIEW_TYPE = "image"
 SEG_IMAGE_VIEW_TYPE = "seg"
 KAGGLE_IMAGE_VIEW_TYPE = "kaggle-seg"
@@ -54,7 +56,6 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         self.use_physical_size_scaling = False
         self.view_type = BASE_IMAGE_VIEW_TYPE
         self.base_image_metadata = None
-        self._metadata_retriever = ImageMetadataRetriever(create_http_resource_loader())
 
     def _get_img_and_offset_url(self, img_path, img_dir):
         """Create a url for the offsets and img.
@@ -183,7 +184,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
                 found_file = found_file[: -len("/.zgroup")]
             return self._build_assets_url(found_file)
         else:  # pragma: no cover
-            print(f"{file_name_to_check} file was not found.")
+            logger.warning("%s file was not found.", file_name_to_check)
             return None
 
     def _add_aoi_rois(self, dataset):
