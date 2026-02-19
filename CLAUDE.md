@@ -48,13 +48,9 @@ pip install -e ".[all]"   # or: uv sync --all-extras
 
 This dual mode drives a key architectural constraint: **all builder imports must be lazy** (string-based references, imported only when needed) so the thin install never touches heavy dependencies.
 
-### Builder Selection (Two Systems)
+### Builder Selection
 
-**Legacy factory** (default): `builder_factory.py:_get_builder_name()` — monolithic conditional tree matching vitessce-hints and assay types to builder name strings.
-
-**Registry** (experimental, opt-in via `USE_BUILDER_REGISTRY=1` env var): `builder_registry.py` — declarative config with priority-based matching. When adding new builders, update **both** systems until registry becomes default.
-
-Both return a string builder name, resolved to a class via `_lazy_import_builder()`.
+`builder_registry.py` — declarative config with priority-based matching. Each builder has `required_hints`, `forbidden_hints`, `assay_types`, `parent_assay_types`, and `priority`. The registry returns a string builder name, resolved to a class via `_lazy_import_builder()` in `builder_factory.py`.
 
 ### Builder Hierarchy
 
@@ -71,7 +67,7 @@ All builders inherit from `ViewConfBuilder` in `builders/base_builders.py`. Core
 ### Key Modules
 
 - `builder_factory.py` — builder selection logic and `get_view_config_builder()` public API
-- `builder_registry.py` — experimental registry-based selection
+- `builder_registry.py` — declarative registry-based builder selection
 - `cli.py` — `vis-preview` CLI entry point
 - `client.py` — `ApiClient` for portal-ui/search-api integration (Flask context)
 - `paths.py` — regex patterns for discovering data files in datasets
@@ -93,8 +89,6 @@ All builders inherit from `ViewConfBuilder` in `builders/base_builders.py`. Core
 
 1. Define assay constant in `assays.py` if needed
 2. Create builder class in appropriate `builders/*_builders.py` file
-3. Add to `builder_factory.py:_get_builder_name()` decision tree
-4. Add config entry to `builder_registry.py:populate_legacy_registry()`
-5. Add lazy import to `builder_factory.py:_lazy_import_builder()`
-6. Add test fixtures in `test/good-fixtures/YourBuilder/{uuid}-entity.json`
-7. Test with both `USE_BUILDER_REGISTRY=0` and `USE_BUILDER_REGISTRY=1`
+3. Add config entry to `builder_registry.py:populate_registry()`
+4. Add lazy import to `builder_factory.py:_lazy_import_builder()`
+5. Add test fixtures in `test/good-fixtures/YourBuilder/{uuid}-entity.json`
