@@ -50,7 +50,6 @@ def _lazy_import_builder(builder_name):
         SegmentationMaskBuilder,
     )
     from .builders.imaging_builders import (
-        EpicSegImagePyramidViewConfBuilder,
         GeoMxImagePyramidViewConfBuilder,
         ImagePyramidViewConfBuilder,
         IMSViewConfBuilder,
@@ -79,7 +78,6 @@ def _lazy_import_builder(builder_name):
         "SpatialMultiomicAnnDataZarrViewConfBuilder": SpatialMultiomicAnnDataZarrViewConfBuilder,
         "SpatialRNASeqAnnDataZarrViewConfBuilder": SpatialRNASeqAnnDataZarrViewConfBuilder,
         "XeniumMultiomicAnnDataZarrViewConfBuilder": XeniumMultiomicAnnDataZarrViewConfBuilder,
-        "EpicSegImagePyramidViewConfBuilder": EpicSegImagePyramidViewConfBuilder,
         "GeoMxImagePyramidViewConfBuilder": GeoMxImagePyramidViewConfBuilder,
         "ImagePyramidViewConfBuilder": ImagePyramidViewConfBuilder,
         "IMSViewConfBuilder": IMSViewConfBuilder,

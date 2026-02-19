@@ -23,7 +23,6 @@ from ..paths import (
     IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
     OFFSETS_DIR,
-    SEGMENTATION_SUBDIR,
     SEGMENTATION_SUPPORT_IMAGE_SUBDIR,
     SEQFISH_FILE_REGEX,
     SEQFISH_HYB_CYCLE_REGEX,
@@ -42,7 +41,6 @@ from .base_builders import ViewConfBuilder
 logger = logging.getLogger(__name__)
 
 BASE_IMAGE_VIEW_TYPE = "image"
-SEG_IMAGE_VIEW_TYPE = "seg"
 KAGGLE_IMAGE_VIEW_TYPE = "kaggle-seg"
 GEOMX_IMAGE_VIEW_TYPE = "geomx-seg"
 
@@ -371,25 +369,9 @@ class ImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         return self.get_conf_cells_common(self._get_img_and_offset_url, **kwargs)
 
 
-class EpicSegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
-    """Wrapper class for creating a standard view configuration for image pyramids for EPIC segmentation mask,
-    i.e for high resolution viz-lifted imaging datasets like
-    https://portal.dev.hubmapconsortium.org/browse/dataset/df7cac7cb67a822f7007b57c4d8f5e7d
-    """
-
-    def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
-        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
-        self.image_pyramid_regex = f"{SEGMENTATION_SUBDIR}/{IMAGE_PYRAMID_DIR}/{SEGMENTATION_SUPPORT_IMAGE_SUBDIR}"
-        self.view_type = SEG_IMAGE_VIEW_TYPE
-
-    def get_conf_cells(self, **kwargs):
-        return self.get_conf_cells_common(self._get_img_and_offset_url_seg, **kwargs)
-
-
 class KaggleSegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
     """Wrapper class for creating a standard view configuration for image pyramids for kaggle-2 datasets, that show,
-    segmentation mask layered over a base image-pyramid, however, the file structure is different than
-    EPIC segmentation masks (EpicSegImagePyramidViewConfBuilder)
+    segmentation mask layered over a base image-pyramid.
     i.e for high resolution viz-lifted imaging datasets like
     https://portal.dev.hubmapconsortium.org/browse/dataset/534a590d7336aa99c7fc7afd41e995fc
     """

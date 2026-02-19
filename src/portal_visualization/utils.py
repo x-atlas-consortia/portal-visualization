@@ -210,9 +210,9 @@ def get_physical_size_units(metadata):
         (1, 100, 'mm', 'mm')
     """
 
-    # size_x and size_y will be one if nothing is provided
-    size_x = metadata["PhysicalSizeX"] if metadata["PhysicalSizeX"] is not None else 1
-    size_y = metadata["PhysicalSizeY"] if metadata["PhysicalSizeY"] is not None else 1
+    # size_x and size_y will be one if nothing is provided or explicitly None
+    size_x = metadata.get("PhysicalSizeX") or 1
+    size_y = metadata.get("PhysicalSizeY") or 1
     size_x_unit = convert_unicode_unit(metadata, "PhysicalSizeUnitX")
     size_y_unit = convert_unicode_unit(metadata, "PhysicalSizeUnitY")
 

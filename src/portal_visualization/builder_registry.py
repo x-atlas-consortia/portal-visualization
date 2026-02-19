@@ -401,7 +401,7 @@ def populate_registry():
     # Each entry defines a builder's selection criteria and priority
     builder_configs = [
         # ============================================================
-        # EPIC and Segmentation Mask Builders (Highest Priority)
+        # EPIC and Segmentation Mask Builders
         # ============================================================
         {
             "builder": "ObjectByAnalyteConfBuilder",
@@ -411,10 +411,10 @@ def populate_registry():
             "priority": PRIORITY_SPECIFIC + 30,
         },
         {
-            "builder": "EpicSegImagePyramidViewConfBuilder",
-            "description": "EPIC segmentation masks without parent dataset",
+            "builder": "SegmentationMaskBuilder",
+            "description": "EPIC segmentation mask datasets",
             "required_hints": ["pyramid", "epic", "is_image", "segmentation_mask"],
-            "priority": PRIORITY_SPECIFIC + 20,
+            "priority": PRIORITY_SPECIFIC + 50,
         },
         {
             "builder": "Kaggle1SegImagePyramidViewConfBuilder",
@@ -431,15 +431,8 @@ def populate_registry():
             "forbidden_hints": ["epic"],
             "priority": PRIORITY_SPECIFIC + 15,
         },
-        {
-            "builder": "SegmentationMaskBuilder",
-            "description": "EPIC segmentation mask support datasets",
-            "required_hints": ["pyramid", "epic", "is_image", "segmentation_mask"],
-            "requires_parent": True,
-            "priority": PRIORITY_SPECIFIC + 50,
-        },
         # ============================================================
-        # Spatial Multiomics (Very Specific)
+        # Spatial Multiomics
         # ============================================================
         {
             "builder": "XeniumMultiomicAnnDataZarrViewConfBuilder",
@@ -454,7 +447,7 @@ def populate_registry():
             "priority": PRIORITY_SPECIFIC,
         },
         # ============================================================
-        # SPRM Imaging Builders (Moderate Priority)
+        # SPRM Imaging Builders
         # ============================================================
         {
             "builder": "MultiImageSPRMAnndataViewConfBuilder",
@@ -482,7 +475,7 @@ def populate_registry():
             "priority": PRIORITY_MODERATE + 3,
         },
         # ============================================================
-        # Multiomics and RNA-seq (Moderate Priority)
+        # Multiomics and RNA-seq
         # ============================================================
         {
             "builder": "MultiomicAnndataZarrViewConfBuilder",
@@ -507,7 +500,7 @@ def populate_registry():
             "priority": PRIORITY_MODERATE - 5,
         },
         # ============================================================
-        # SPRM Non-Imaging (Fallback Priority)
+        # SPRM Non-Imaging
         # ============================================================
         {
             "builder": "SPRMJSONViewConfBuilder",
@@ -522,7 +515,7 @@ def populate_registry():
             "priority": PRIORITY_FALLBACK + 10,
         },
         # ============================================================
-        # Generic Sequencing Data (Fallback Priority)
+        # Generic Sequencing Data
         # ============================================================
         {
             "builder": "RNASeqAnnDataZarrViewConfBuilder",
@@ -575,7 +568,7 @@ def populate_registry():
             "priority": PRIORITY_FALLBACK + 8,
         },
         # ============================================================
-        # Direct Imaging by Assay Type (Fallback Priority)
+        # Direct Imaging by Assay Type
         # ============================================================
         {
             "builder": "IMSViewConfBuilder",
@@ -590,7 +583,7 @@ def populate_registry():
             "priority": PRIORITY_FALLBACK + 2,
         },
         # ============================================================
-        # Null Builder (Absolute Fallback)
+        # Null Builder
         # ============================================================
         {
             "builder": "NullViewConfBuilder",

@@ -27,7 +27,6 @@ try:
     import zarr
 
     from src.portal_visualization.builders.imaging_builders import (
-        EpicSegImagePyramidViewConfBuilder,
         Kaggle1SegImagePyramidViewConfBuilder,
         KaggleSegImagePyramidViewConfBuilder,
     )
@@ -99,14 +98,14 @@ excluded_fixtures = {
     # ImagePyramidViewConfBuilder, KaggleSegImagePyramidViewConfBuilder,
     # ImsImagePyramidViewConfBuilder, NanoDESIImagePyramidViewConfBuilder,
     # MultiImageSPRMViewConfBuilder, ATACSeqViewConfBuilder, RNASeqViewConfBuilder,
-    # SeqFISHViewConfBuilder, EpicSegImagePyramidViewConfBuilder - all use "fake-entity.json"
+    # SeqFISHViewConfBuilder - all use "fake-entity.json"
     "fake-entity.json",
     # ImagePyramidViewConfBuilder (unique UUID)
     "3bc3ad12-entity.json",
     # GeoMxImagePyramidViewConfBuilder
     "bc7239d27b79e087c788600261f073e5-entity.json",
     "bc7239d27b79e087c788600261f073e5-zarr-zip-entity.json",
-    # EpicSegImagePyramidViewConfBuilder (SegmentationMaskBuilder)
+    # SegmentationMaskBuilder
     "fake-zarr-zip-entity.json",
     # NullViewConfBuilder (now programmatic)
     "empty-entity.json",
@@ -1243,7 +1242,6 @@ def generate_epic_seg_test_cases():
                     {"rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr/metadata.json"},
                 ],
                 immediate_ancestors=[{"data_types": ["PAS"]}],
-                parent={"uuid": "22901da5f080b219a514e38381acbb0e"},
             ),
         )
     )
@@ -1268,7 +1266,6 @@ def generate_epic_seg_test_cases():
                     {"rel_path": "extras/transformations/hubmap_ui/seg-to-mudata-zarr/objects.zarr.zip"},
                 ],
                 immediate_ancestors=[{"data_types": ["PAS"]}],
-                parent={"uuid": "22901da5f080b219a514e38381acbb0e"},
             ),
         )
     )
@@ -1833,48 +1830,6 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
 
     # Verify spatial view is still present
     assert "spatial" in layout_str.lower(), "Spatial view should still be present"
-
-
-@pytest_requires_full
-def test_epic_seg_image_pyramid_builder_initialization():
-    """Test that EpicSegImagePyramidViewConfBuilder initializes correctly."""
-    entity = {
-        "uuid": "test-uuid",
-        "vitessce-hints": ["segmentation_mask"],
-        "files": [],
-    }
-
-    builder = EpicSegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
-
-    # Verify the builder sets the correct attributes
-    # SEGMENTATION_SUBDIR = "extras/transformations"
-    # IMAGE_PYRAMID_DIR = "ometiff-pyramids"
-    # SEGMENTATION_SUPPORT_IMAGE_SUBDIR = "lab_processed/images"
-    assert "ometiff-pyramids" in builder.image_pyramid_regex
-    assert "lab_processed/images" in builder.image_pyramid_regex
-    assert builder.view_type == "seg"
-
-
-@pytest_requires_full
-def test_epic_seg_image_pyramid_builder_get_conf_cells(mocker):
-    """Test that EpicSegImagePyramidViewConfBuilder.get_conf_cells works."""
-    entity = {
-        "uuid": "test-uuid",
-        "status": "Published",
-        "vitessce-hints": ["segmentation_mask"],
-        "files": [
-            {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/expr_0.ome.tiff"},
-        ],
-    }
-
-    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
-
-    builder = EpicSegImagePyramidViewConfBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
-
-    # Call get_conf_cells - it should return None for missing files but the call covers line 385
-    conf_cells = builder.get_conf_cells()
-    # The method should execute without error (covers line 385)
-    assert conf_cells is not None
 
 
 @pytest_requires_full

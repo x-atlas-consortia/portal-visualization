@@ -28,36 +28,22 @@ zarr_path = f"{SEGMENTATION_SUBDIR}/{SEGMENTATION_ZARR_STORES}"
 
 
 class SegmentationMaskBuilder(ViewConfBuilder):
-    """Builder for EPIC segmentation mask support datasets.
+    """Builder for EPIC segmentation mask datasets.
 
-    Creates visualizations that overlay segmentation masks on base images from the parent dataset.
-    Requires a parent dataset with base images.
+    Creates visualizations that overlay segmentation masks on base images.
+    Both base images and segmentation masks are co-located in the entity's own files.
     """
-
-    def __init__(self, entity, groups_token, assets_endpoint, get_entity=None, parent=None, **kwargs):
-        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
-        self._get_entity = get_entity
-        self._parent_uuid = parent
 
     def get_conf_cells(self, **kwargs):
         """Generate Vitessce configuration for segmentation masks."""
-        # Get parent entity to extract base image information
-        if self._parent_uuid is None:
-            raise ValueError("SegmentationMaskBuilder requires a parent dataset")
-
-        if self._get_entity is None:
-            raise ValueError("SegmentationMaskBuilder requires get_entity callback")
-
-        parent_entity = self._get_entity(self._parent_uuid)
-
-        # Build base image configuration from parent
-        base_image_metadata = self._get_base_image_metadata(parent_entity)
-        base_image_url, base_offsets_url = self._get_base_image_urls(parent_entity)
+        # Build base image configuration from entity's own files
+        base_image_metadata = self._get_base_image_metadata()
+        base_image_url, base_offsets_url = self._get_base_image_urls()
 
         # Build the Vitessce configuration
         vc, dataset = self._create_vitessce_config(dataset_name="Segmentation Masks")
 
-        # Add base image from parent
+        # Add base image
         dataset = dataset.add_object(
             ImageOmeTiffWrapper(
                 img_url=base_image_url,
@@ -148,25 +134,9 @@ class SegmentationMaskBuilder(ViewConfBuilder):
 
         return get_conf_cells(vc)
 
-    def _get_base_image_metadata(self, parent_entity):
-        """Extract base image metadata from parent dataset."""
-        # Find base image file in parent
-        parent_files = parent_entity.get("files", [])
-        parent_file_paths = [file["rel_path"] for file in parent_files]
-
-        # Look for image pyramids, excluding segmentation masks
-        # Pattern allows for optional prefixes like "extras/transformations/"
-        found_images = list(
-            get_matches(
-                parent_file_paths,
-                r".*" + IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
-            )
-        )
-        # Filter out segmentation mask files (contain "segmentation" in filename)
-        filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
-
-        if not filtered_images:  # pragma: no cover
-            raise FileNotFoundError(f"Dataset {self._parent_uuid} is missing base image pyramid files (parent dataset)")
+    def _get_base_image_metadata(self):
+        """Extract base image metadata from the entity's own files."""
+        filtered_images = self._find_base_images()
 
         # Get metadata for first image (optional - may not be available in tests)
         metadata_path = re.sub(
@@ -175,32 +145,41 @@ class SegmentationMaskBuilder(ViewConfBuilder):
             re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, filtered_images[0]),
         )
 
-        # Check if metadata file exists in parent files
-        if metadata_path in parent_file_paths:
-            # Build URL for parent's metadata using parent UUID
-            metadata_url = f"{self._assets_endpoint}/{self._parent_uuid}/{metadata_path}"
-            if self._groups_token:
-                metadata_url += f"?token={self._groups_token}"
-
+        # Check if metadata file exists in entity files
+        file_paths = self._get_file_paths()
+        if metadata_path in file_paths:
+            metadata_url = self._build_assets_url(metadata_path)
             try:
                 return get_image_metadata(self, metadata_url)
             except (FileNotFoundError, Exception):  # pragma: no cover
                 # Metadata not available, return empty dict
                 return {}
         else:
-            # Metadata file not in parent entity files
+            # Metadata file not in entity files
             return {}
 
-    def _get_base_image_urls(self, parent_entity):
-        """Get base image and offsets URLs from parent dataset."""
-        parent_files = parent_entity.get("files", [])
-        parent_file_paths = [file["rel_path"] for file in parent_files]
+    def _get_base_image_urls(self):
+        """Get base image and offsets URLs from the entity's own files."""
+        filtered_images = self._find_base_images()
+        img_path = filtered_images[0]
 
-        # Look for image pyramids, excluding segmentation masks
-        # Pattern allows for optional prefixes like "extras/transformations/"
+        img_url = self._build_assets_url(img_path)
+
+        offsets_path = re.sub(
+            r"ome\.tiff?",
+            "offsets.json",
+            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
+        )
+        offsets_url = self._build_assets_url(offsets_path)
+
+        return img_url, offsets_url
+
+    def _find_base_images(self):
+        """Find base image pyramid files in the entity, excluding segmentation masks."""
+        file_paths = self._get_file_paths()
         found_images = list(
             get_matches(
-                parent_file_paths,
+                file_paths,
                 r".*" + IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
             )
         )
@@ -208,25 +187,9 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         filtered_images = [img for img in found_images if "segmentation" not in img.lower()]
 
         if not filtered_images:  # pragma: no cover
-            raise FileNotFoundError(f"Dataset {self._parent_uuid} is missing base image pyramid files (parent dataset)")
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing base image pyramid files")
 
-        img_path = filtered_images[0]
-
-        # Build URLs for parent's image using parent UUID
-        img_url = f"{self._assets_endpoint}/{self._parent_uuid}/{img_path}"
-        if self._groups_token:
-            img_url += f"?token={self._groups_token}"
-
-        offsets_path = re.sub(
-            r"ome\.tiff?",
-            "offsets.json",
-            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
-        )
-        offsets_url = f"{self._assets_endpoint}/{self._parent_uuid}/{offsets_path}"
-        if self._groups_token:
-            offsets_url += f"?token={self._groups_token}"
-
-        return img_url, offsets_url
+        return filtered_images
 
     def zarr_store_url(self):
         adata_url = self._build_assets_url(zarr_path, use_token=False)
