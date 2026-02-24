@@ -13,6 +13,42 @@ defaults = json.load((Path(__file__).parent / "defaults.json").open())
 ENV = "dev"
 
 
+def _cli_find_support_entity(uuid):  # pragma: no cover
+    """Find a support entity (is_support + is_image descendant) for the given UUID.
+
+    Mirrors the query in client.py's get_descendant_to_lift().
+    """
+    import requests as req
+
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"vitessce-hints": "is_support"}},
+                    {"term": {"vitessce-hints": "is_image"}},
+                    {"term": {"ancestor_ids": uuid}},
+                    {"terms": {"mapped_status.keyword": ["QA", "Published"]}},
+                ]
+            }
+        },
+        "sort": [{"last_modified_timestamp": {"order": "desc"}}],
+        "size": 1,
+    }
+    try:
+        response = req.post(
+            defaults[ENV]["elastic_search_api"],
+            headers=headers if "headers" in globals() else {},
+            json=query,
+        )
+        if response.status_code == 200:
+            hits = response.json().get("hits", {}).get("hits", [])
+            if hits:
+                return hits[0]["_source"]
+    except Exception as e:
+        print(f"Warning: Could not find support entity for {uuid}: {e}", file=stderr)
+    return None
+
+
 def main():  # pragma: no cover
     """CLI entry point for vis-preview command.
 
@@ -75,8 +111,23 @@ def main():  # pragma: no cover
 
     # conf = client.get_vitessce_conf_cells_and_lifted_uuid(entity, None, True, parent_uuid, epic_uuid).vitessce_conf
 
+    # Resolve parent entity if parent_uuid is provided
+    parent = None
+    if parent_uuid:
+        parent = get_entity(parent_uuid)
+        if parent is None:
+            print(f"Warning: Could not fetch parent entity {parent_uuid}", file=stderr)
+            parent = {"uuid": parent_uuid}
+
     Builder = get_view_config_builder(entity, get_entity, parent_uuid)
-    builder = Builder(entity, args.token, args.assets_url)
+    builder = Builder(
+        entity,
+        args.token,
+        args.assets_url,
+        get_entity=get_entity,
+        parent=parent or parent_uuid,
+        find_support_entity=_cli_find_support_entity,
+    )
     print(f"Using: {builder.__class__.__name__}", file=stderr)
     conf_cells = builder.get_conf_cells(marker=marker)
 

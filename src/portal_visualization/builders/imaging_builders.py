@@ -418,6 +418,15 @@ class Kaggle1SegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         self._find_support_entity = find_support_entity
         self.seg_image_pyramid_regex = IMAGE_PYRAMID_DIR
         self.view_type = KAGGLE_IMAGE_VIEW_TYPE
+        self._base_image_source = None
+
+    @property
+    def base_image_source(self):
+        """How base images were resolved: 'colocated' or 'support_entity'.
+
+        None if get_conf_cells() has not been called yet.
+        """
+        return self._base_image_source
 
     def _has_colocated_base_images(self):
         """Check if the entity has base images in its own files (Kaggle-2 style)."""
@@ -435,11 +444,13 @@ class Kaggle1SegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
 
         if matched_dirs:
             # Base images found locally — use Kaggle-2 style (co-located)
+            self._base_image_source = "colocated"
             image_dir = next(iter(matched_dirs))
             self.image_pyramid_regex = f"{IMAGE_PYRAMID_DIR}/{image_dir}"
             return self.get_conf_cells_common(self._get_img_and_offset_url_seg, **kwargs)
 
         # No base images in own files — fetch from parent's support entity
+        self._base_image_source = "support_entity"
         return self._get_conf_cells_from_support(**kwargs)
 
     def _get_conf_cells_from_support(self, **kwargs):

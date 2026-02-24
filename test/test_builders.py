@@ -2013,6 +2013,72 @@ def test_kaggle1_builder_no_token(mocker):
     assert len(datasets) > 0
 
 
+@pytest_requires_full
+def test_kaggle1_builder_base_image_source_support_entity(mocker):
+    """Test that base_image_source is 'support_entity' when base images come from parent's support."""
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [
+            {"rel_path": "ometiff-pyramids/seg.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/seg.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/seg.segmentations.metadata.json"},
+        ],
+    }
+
+    support_entity = {
+        "uuid": "support-uuid",
+        "files": [
+            {"rel_path": "ometiff-pyramids/lab_processed/images/base.ome.tif"},
+            {"rel_path": "output_offsets/lab_processed/images/base.offsets.json"},
+            {"rel_path": "image_metadata/lab_processed/images/base.metadata.json"},
+        ],
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: support_entity,
+    )
+    assert builder.base_image_source is None
+    builder.get_conf_cells()
+    assert builder.base_image_source == "support_entity"
+
+
+@pytest_requires_full
+def test_kaggle1_builder_base_image_source_colocated(mocker):
+    """Test that base_image_source is 'colocated' when base images are in entity's own files."""
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
+
+    entity = {
+        "uuid": "test-uuid",
+        "vitessce-hints": ["segmentation_mask", "pyramid", "is_image"],
+        "files": [
+            {"rel_path": "ometiff-pyramids/lab_processed/images/base.ome.tif"},
+            {"rel_path": "output_offsets/lab_processed/images/base.offsets.json"},
+            {"rel_path": "image_metadata/lab_processed/images/base.metadata.json"},
+            {"rel_path": "ometiff-pyramids/seg.segmentations.ome.tif"},
+            {"rel_path": "output_offsets/seg.segmentations.offsets.json"},
+            {"rel_path": "image_metadata/seg.segmentations.metadata.json"},
+        ],
+    }
+
+    builder = Kaggle1SegImagePyramidViewConfBuilder(
+        entity,
+        groups_token="token",
+        assets_endpoint="https://example.com",
+        parent="parent-uuid",
+        find_support_entity=lambda uuid: None,
+    )
+    assert builder.base_image_source is None
+    builder.get_conf_cells()
+    assert builder.base_image_source == "colocated"
+
+
 if __name__ == "__main__":  # pragma: no cover
     parser = argparse.ArgumentParser(description="Generate fixtures")
     parser.add_argument("--input", required=True, type=Path, help="Input JSON path")
