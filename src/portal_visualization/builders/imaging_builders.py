@@ -538,7 +538,7 @@ class GeoMxImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
     """Wrapper class for creating a view configuration for image pyramids for GeoMx datasets, that show,
     segmentation mask layered over a base image-pyramid with AOIs and ROIs highlighted.
     i.e for high resolution viz-lifted imaging datasets like
-    TODO: add example https://portal.dev.hubmapconsortium.org/browse/dataset/
+    https://portal.hubmapconsortium.org/browse/dataset/7a009a7cca74d63e2a9e184c6c1becca
     """
 
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
