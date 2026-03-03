@@ -41,15 +41,13 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         base_image_url, base_offsets_url = self._get_base_image_urls()
 
         # Build the Vitessce configuration
-        vc, dataset = self._create_vitessce_config(dataset_name="Segmentation Masks")
+        vc, dataset = self._create_vitessce_config(dataset_name="Segmentation Mask")
 
         # Add base image
         dataset = dataset.add_object(
             ImageOmeTiffWrapper(
                 img_url=base_image_url,
                 offsets_url=base_offsets_url,
-                name="Base Image",
-                coordination_values={"fileUid": "base-image"},
             )
         )
 
@@ -138,25 +136,15 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         """Extract base image metadata from the entity's own files."""
         filtered_images = self._find_base_images()
 
-        # Get metadata for first image (optional - may not be available in tests)
+        # Build metadata URL by replacing pyramid dir and extension
         metadata_path = re.sub(
             r"ome\.tiff?",
             "metadata.json",
             re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, filtered_images[0]),
         )
 
-        # Check if metadata file exists in entity files
-        file_paths = self._get_file_paths()
-        if metadata_path in file_paths:
-            metadata_url = self._build_assets_url(metadata_path)
-            try:
-                return get_image_metadata(self, metadata_url)
-            except (FileNotFoundError, Exception):  # pragma: no cover
-                # Metadata not available, return empty dict
-                return {}
-        else:
-            # Metadata file not in entity files
-            return {}
+        metadata_url = self._build_assets_url(metadata_path)
+        return get_image_metadata(self, metadata_url)
 
     def _get_base_image_urls(self):
         """Get base image and offsets URLs from the entity's own files."""

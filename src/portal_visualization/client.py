@@ -242,7 +242,6 @@ class ApiClient:
                     minimal=minimal,
                     find_support_entity=self.get_descendant_to_lift,
                 )
-                print(Builder)
                 vitessce_conf = builder.get_conf_cells(marker=marker)
             except Exception as e:
                 if not wrap_error:
