@@ -13,6 +13,42 @@ defaults = json.load((Path(__file__).parent / "defaults.json").open())
 ENV = "dev"
 
 
+def _cli_find_support_entity(uuid):  # pragma: no cover
+    """Find a support entity (is_support + is_image descendant) for the given UUID.
+
+    Mirrors the query in client.py's get_descendant_to_lift().
+    """
+    import requests as req
+
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"vitessce-hints": "is_support"}},
+                    {"term": {"vitessce-hints": "is_image"}},
+                    {"term": {"ancestor_ids": uuid}},
+                    {"terms": {"mapped_status.keyword": ["QA", "Published"]}},
+                ]
+            }
+        },
+        "sort": [{"last_modified_timestamp": {"order": "desc"}}],
+        "size": 1,
+    }
+    try:
+        response = req.post(
+            defaults[ENV]["elastic_search_api"],
+            headers=headers if "headers" in globals() else {},
+            json=query,
+        )
+        if response.status_code == 200:
+            hits = response.json().get("hits", {}).get("hits", [])
+            if hits:
+                return hits[0]["_source"]
+    except Exception as e:
+        print(f"Warning: Could not find support entity for {uuid}: {e}", file=stderr)
+    return None
+
+
 def main():  # pragma: no cover
     """CLI entry point for vis-preview command.
 
@@ -22,7 +58,6 @@ def main():  # pragma: no cover
     # Import heavy dependencies only when CLI is actually run
     try:
         from portal_visualization.builder_factory import get_view_config_builder
-        from portal_visualization.epic_factory import get_epic_builder
     except ImportError as e:
         print(
             "ERROR: The vis-preview CLI requires the [full] installation.\n"
@@ -49,7 +84,6 @@ def main():  # pragma: no cover
     parser.add_argument("--token", help="Globus groups token; Only needed if data is not public", default="")
     parser.add_argument("--marker", help="Marker to highlight in visualization; Only used in some visualizations.")
     parser.add_argument("--to_json", action="store_true", help="Output viewconf, rather than open in browser.")
-    parser.add_argument("--epic_uuid", metavar="UUID", help="uuid of the EPIC dataset.", default=None)
     parser.add_argument(
         "--parent_uuid",
         metavar="UUID",
@@ -59,7 +93,6 @@ def main():  # pragma: no cover
 
     args = parser.parse_args()
     marker = args.marker
-    epic_uuid = args.epic_uuid
     parent_uuid = args.parent_uuid
 
     headers = get_headers(args.token)
@@ -78,18 +111,25 @@ def main():  # pragma: no cover
 
     # conf = client.get_vitessce_conf_cells_and_lifted_uuid(entity, None, True, parent_uuid, epic_uuid).vitessce_conf
 
-    Builder = get_view_config_builder(entity, get_entity, parent_uuid, epic_uuid)
-    builder = Builder(entity, args.token, args.assets_url)
+    # Resolve parent entity if parent_uuid is provided
+    parent = None
+    if parent_uuid:
+        parent = get_entity(parent_uuid)
+        if parent is None:
+            print(f"Warning: Could not fetch parent entity {parent_uuid}", file=stderr)
+            parent = {"uuid": parent_uuid}
+
+    Builder = get_view_config_builder(entity, get_entity, parent_uuid)
+    builder = Builder(
+        entity,
+        args.token,
+        args.assets_url,
+        get_entity=get_entity,
+        parent=parent or parent_uuid,
+        find_support_entity=_cli_find_support_entity,
+    )
     print(f"Using: {builder.__class__.__name__}", file=stderr)
     conf_cells = builder.get_conf_cells(marker=marker)
-
-    if epic_uuid is not None and conf_cells is not None:  # pragma: no cover
-        EpicBuilder = get_epic_builder(epic_uuid)
-        epic_builder = EpicBuilder(
-            epic_uuid, conf_cells, entity, args.token, args.assets_url, builder.base_image_metadata
-        )
-        print(f"Using: {epic_builder.__class__.__name__}", file=stderr)
-        conf_cells = epic_builder.get_conf_cells()
 
     conf_as_json = json.dumps(conf_cells.conf[0]) if isinstance(conf_cells.conf, list) else json.dumps(conf_cells.conf)
 
@@ -148,5 +188,104 @@ def get_entity_from_args(url_arg, json_arg, headers):  # pragma: no cover
     return entity
 
 
+def debug_builder_selection():  # pragma: no cover
+    """CLI entry point for debugging builder selection.
+
+    This command helps diagnose why a particular builder was (or wasn't) selected.
+    """
+    parser = argparse.ArgumentParser(
+        description="Debug builder selection for a dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Check builder selection for a dataset
+  python -m portal_visualization.cli debug --json dataset.json
+
+  # Provide hints directly
+  python -m portal_visualization.cli debug --hints is_image rna
+        """,
+    )
+
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--json", type=Path, help="File containing Dataset JSON")
+    input_group.add_argument("--url", help="URL which returns Dataset JSON")
+    input_group.add_argument("--hints", nargs="+", help="Hints to test directly")
+
+    parser.add_argument("--assay-type", help="Assay type to test")
+    parser.add_argument("--parent-assay-type", help="Parent assay type to test")
+    parser.add_argument("--has-parent", action="store_true", help="Simulate having a parent")
+    parser.add_argument("--has-epic", action="store_true", help="Simulate having an EPIC UUID")
+    parser.add_argument("--token", help="Globus groups token for protected datasets", default="")
+
+    args = parser.parse_args()
+
+    if args.hints:
+        # Direct hints mode
+        hints = args.hints
+        assay_type = args.assay_type
+        parent_assay_type = args.parent_assay_type
+        has_parent = args.has_parent
+        has_epic = args.has_epic
+    else:
+        # Load from JSON
+        entity = get_entity_from_args(args.url, args.json, args.token)
+        hints = entity.get("vitessce-hints", [])
+        assay_type = entity.get("soft_assaytype")
+        parent_assay_type = args.parent_assay_type
+        has_parent = args.has_parent
+        has_epic = args.has_epic
+
+    print("=" * 80)
+    print("BUILDER SELECTION DIAGNOSTICS")
+    print("=" * 80)
+    print()
+
+    from portal_visualization.builder_registry import get_registry, populate_registry
+
+    populate_registry()
+    registry = get_registry()
+
+    diagnostics = registry.get_match_diagnostics(
+        hints=hints,
+        assay_type=assay_type,
+        has_parent=has_parent,
+        has_epic=has_epic,
+        parent_assay_type=parent_assay_type,
+    )
+
+    print("Search Criteria:")
+    print(f"  Hints: {diagnostics['search_criteria']['hints']}")
+    print(f"  Assay type: {diagnostics['search_criteria']['assay_type'] or '(none)'}")
+    print(f"  Has parent: {diagnostics['search_criteria']['has_parent']}")
+    if parent_assay_type:
+        print(f"  Parent assay type: {parent_assay_type}")
+    if has_epic:
+        print(f"  Has EPIC UUID: {has_epic}")
+    print()
+
+    if diagnostics["selected"]:
+        print(f"SELECTED BUILDER: {diagnostics['selected']}")
+        print(f"  Priority: {diagnostics['matching_builders'][0]['priority']}")
+        print()
+
+        if len(diagnostics["matching_builders"]) > 1:
+            print(f"Other matching builders ({len(diagnostics['matching_builders']) - 1}):")
+            for match in diagnostics["matching_builders"][1:]:
+                print(f"  - {match['builder']} (priority={match['priority']})")
+            print()
+    else:
+        print("NO BUILDER MATCHED")
+        print()
+        print(registry.format_no_match_message(hints, assay_type, has_parent, has_epic, parent_assay_type))
+
+    print("=" * 80)
+
+
 if __name__ == "__main__":  # pragma: no cover
-    main()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "debug":
+        sys.argv.pop(1)  # Remove 'debug' from args
+        debug_builder_selection()
+    else:
+        main()

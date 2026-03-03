@@ -1,7 +1,6 @@
 from functools import cached_property
 
 import numpy as np
-import zarr
 from vitessce import (
     AnnDataWrapper,
     ImageOmeTiffWrapper,
@@ -17,7 +16,9 @@ from vitessce import CoordinationType as ct
 from vitessce import ViewType as vt
 
 from ..constants import MAX_OBS_FOR_HEATMAP, MULTIOMIC_ZARR_PATH, XENIUM_ZARR_PATH, ZARR_PATH, ZIP_ZARR_PATH
-from ..utils import get_conf_cells, obs_has_column, read_zip_zarr
+from ..data_access import create_zarr_accessor
+from ..utils import get_conf_cells, obs_has_column
+from ..view_layout import create_layout_config
 from .base_builders import ViewConfBuilder
 
 RNA_SEQ_ANNDATA_FACTOR_PATHS = [
@@ -38,7 +39,6 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         # Spatially resolved RNA-seq assays require some special handling,
         # and others do not.
         self._is_spatial = False
-        self._is_zarr_zip = False
         self._spatial_w = 0
         self._obs_set_paths = None
         self._obs_set_names = None
@@ -50,22 +50,6 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         self._is_annotated = None
         self._scatterplot_w = None
         self._scatterplot_h = None
-
-    @cached_property
-    def zarr_store(self):
-        request_init = self._get_request_init() or {}
-        zarr_path = ZIP_ZARR_PATH if self._is_zarr_zip else ZARR_PATH
-
-        if self._is_zarr_zip:
-            zarr_url = self._build_assets_url(zarr_path, use_token=True)
-            try:
-                return read_zip_zarr(zarr_url, request_init)
-            except Exception as e:  # pragma: no cover
-                print(f"Error opening the zip zarr file. {e}")
-                return None
-        else:
-            zarr_url = self._build_assets_url(zarr_path, use_token=False)
-            return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": request_init})
 
     @cached_property
     def has_marker_genes(self):
@@ -85,11 +69,8 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
     def n_obs(self):
         """Get the number of observations in the dataset.
 
-        >>> from pathlib import Path
-        >>> import json
         >>> import zarr
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-is-not-annotated-published-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> entity = {'uuid': 'test', 'status': 'Published', 'vitessce-hints': ['rna', 'is_annotated'], 'soft_assaytype': 'salmon_sn_rnaseq_10x', 'data_types': ['salmon_sn_rnaseq_10x'], 'files': [{'rel_path': 'hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup'}]}
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Mock zarr store with obs index
         >>> z = zarr.open_group()
@@ -125,10 +106,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
 
         For heatmap views, also check if the dataset has too many observations for performance.
 
-        >>> from pathlib import Path
-        >>> import json
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "RNASeqAnnDataZarrViewConfBuilder" / "fake-is-not-annotated-published-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> entity = {'uuid': 'test', 'status': 'Published', 'vitessce-hints': ['rna', 'is_annotated'], 'soft_assaytype': 'salmon_sn_rnaseq_10x', 'data_types': ['salmon_sn_rnaseq_10x'], 'files': [{'rel_path': 'hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup'}]}
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Test with small dataset - set cached n_obs value directly on instance
         >>> builder._minimal = False
@@ -158,9 +136,11 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
         # Use .zgroup file as proxy for whether or not the zarr store is present.
         if f"{ZARR_PATH}.zip" in file_paths_found:
             self._is_zarr_zip = True
-        elif f"{ZARR_PATH}/.zgroup" not in file_paths_found:
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {ZARR_PATH}"
-            raise FileNotFoundError(message)
+        else:
+            try:
+                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
+            except FileNotFoundError:
+                raise
         self._is_annotated = self.is_annotated
         if self._scatterplot_w is None:
             self._scatterplot_w = self.compute_scatterplot_w()
@@ -168,7 +148,7 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
             self._scatterplot_h = self.compute_scatterplot_h()
         self._set_up_marker_gene(marker)
         self._set_up_obs_labels()
-        vc = VitessceConfig(name=self._uuid, schema_version=self._schema_version)
+        vc, _ = self._create_vitessce_config()
         dataset = self._set_up_dataset(vc)
         vc = self._setup_anndata_view_config(vc, dataset)
         vc = self._link_marker_gene(vc)
@@ -347,34 +327,30 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
             )
         )
 
-        # Handle layout for variants in one unified place
-        if self._minimal:
-            if self._is_spatial:
-                scatterplot.set_xywh(x=0, y=0, w=6, h=6)
-                spatial.set_xywh(x=0, y=6, w=6, h=6)
-                cell_sets.set_xywh(x=6, y=0, w=6, h=4)
-                cell_sets_expr.set_xywh(x=6, y=4, w=6, h=8)
-                self._views = [scatterplot, spatial, cell_sets_expr]
-            else:
-                scatterplot.set_xywh(x=0, y=0, w=6, h=12)
-                cell_sets.set_xywh(x=6, y=0, w=6, h=4)
-                cell_sets_expr.set_xywh(x=6, y=4, w=6, h=8)
+        # Apply layout configuration
+        layout_config = create_layout_config(
+            minimal=self._minimal, is_spatial=self._is_spatial, include_heatmap=(heatmap is not None)
+        )
 
-                self._views = [scatterplot, cell_sets_expr]
+        if self._minimal:
+            views_dict = {
+                "scatterplot": scatterplot,
+                "spatial": spatial,
+                "cell_sets": cell_sets,
+                "cell_sets_expr": cell_sets_expr,
+            }
+            self._views = layout_config.apply_minimal_layout(views_dict)
         else:
-            if self._is_spatial:
-                if heatmap is not None:
-                    vc.layout(((scatterplot | spatial) / heatmap) | ((cell_sets | gene_list) / cell_sets_expr))
-                else:
-                    # When heatmap is hidden, expand scatterplot/spatial vertically to fill the space
-                    vc.layout((scatterplot | spatial) | ((cell_sets | gene_list) / cell_sets_expr))
-            else:
-                if heatmap is not None:
-                    vc.layout((scatterplot / heatmap) | ((cell_sets | gene_list) / cell_sets_expr))
-                else:
-                    # When heatmap is hidden, expand scatterplot vertically to fill the space
-                    vc.layout(scatterplot | ((cell_sets | gene_list) / cell_sets_expr))
-                    scatterplot.set_xywh(x=0, y=0, w=6, h=12)
+            views_dict = {
+                "scatterplot": scatterplot,
+                "spatial": spatial,
+                "heatmap": heatmap,
+                "cell_sets": cell_sets,
+                "gene_list": gene_list,
+                "cell_sets_expr": cell_sets_expr,
+            }
+            layout_config.apply_full_layout(vc, views_dict)
+
             # Adjust the cell sets and gene list to not be as tall,
             # give cell sets expression more height
             cell_sets.set_xywh(x=6, y=0, w=3, h=4)
@@ -458,7 +434,7 @@ class SpatialRNASeqAnnDataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         )
         visium_spots = AnnDataWrapper(
             adata_url=adata_url,
-            iz_zip=self._is_zarr_zip,
+            is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
             obs_set_paths=self._obs_set_paths,
             obs_set_names=self._obs_set_names,
@@ -573,9 +549,11 @@ class SpatialMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewCon
             self._is_zarr_zip = True
             zarr_path = ZIP_ZARR_PATH
 
-        elif f"{ZARR_PATH}/.zgroup" not in file_paths_found:  # pragma: no cover
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {ZARR_PATH}"
-            raise FileNotFoundError(message)
+        else:  # pragma: no cover
+            try:
+                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
+            except FileNotFoundError:
+                raise
         adata_url = self._build_assets_url(zarr_path, use_token=False)
         image_url = self._build_assets_url("ometiff-pyramids/visium_histology_hires_pyramid.ome.tif", use_token=True)
         offsets_url = self._build_assets_url(
@@ -623,11 +601,12 @@ class XeniumMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewConf
                 self._is_zarr_zip = True
             zarr_path = f"{zarr_path}.zip"
 
-        elif (
-            self._is_zarr_zip is False or self._is_spatial_zarr_zip is False
-        ) and f"{zarr_path}/.zgroup" not in file_paths_found:  # pragma: no cover
-            message = f"RNA-seq assay with uuid {self._uuid} has no .zarr store at {zarr_path}"
-            raise FileNotFoundError(message)
+        else:  # pragma: no cover
+            if self._is_zarr_zip is False or self._is_spatial_zarr_zip is False:
+                try:
+                    self._require_file(f"{zarr_path}/.zgroup", f"a .zarr store at {zarr_path}")
+                except FileNotFoundError:
+                    raise
         return self._build_assets_url(zarr_path, use_token=False)
 
     def _set_xenium_datasets(self, vc, adata_url, spatial_data_url):
@@ -643,7 +622,7 @@ class XeniumMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewConf
         )
         visium_spots = AnnDataWrapper(
             adata_url=adata_url,
-            iz_zip=self._is_zarr_zip,
+            is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
             obs_set_paths=self._obs_set_paths,
             obs_set_names=self._obs_set_names,
@@ -734,11 +713,15 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         self._scatterplot_w = 3
 
     @cached_property
+    def _zarr_accessor(self):
+        """Get ZarrStoreAccessor instance for this builder."""
+        return create_zarr_accessor(self)
+
+    @cached_property
     def zarr_store(self):
+        """Open the Zarr store using ZarrStoreAccessor."""
         zarr_path = f"{MULTIOMIC_ZARR_PATH}.zip" if self._is_zarr_zip else MULTIOMIC_ZARR_PATH
-        request_init = self._get_request_init() or {}
-        adata_url = self._build_assets_url(zarr_path, use_token=False)
-        return zarr.open(adata_url, mode="r", storage_options={"client_kwargs": request_init})
+        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
     @cached_property
     def has_marker_genes(self):
@@ -762,11 +745,17 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
     def n_obs(self):
         """Get the number of observations in the multiomics dataset.
 
-        >>> from pathlib import Path
         >>> import json
         >>> import zarr
-        >>> fixture_path = Path(__file__).parent.parent.parent.parent / "test" / "good-fixtures" / "MultiomicAnndataZarrViewConfBuilder" / "fake-multiome-entity.json"
-        >>> entity = json.loads(fixture_path.read_text())
+        >>> # Create a simple programmatic entity
+        >>> entity = {
+        ...     "uuid": "test-uuid",
+        ...     "status": "Published",
+        ...     "vitessce-hints": ["rna", "atac", "is_sc"],
+        ...     "soft_assaytype": "multiome",
+        ...     "data_types": ["multiome"],
+        ...     "files": [{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}]
+        ... }
         >>> builder = MultiomicAnndataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Case 1: _index array exists (most common case)
         >>> z = zarr.open_group()
@@ -850,7 +839,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         )
 
         for column_name, column_label, multivec_label in cluster_columns:
-            vc = VitessceConfig(name=f"{column_label}", schema_version=self._schema_version)
+            vc, _ = self._create_vitessce_config(name=f"{column_label}")
             dataset = self._set_up_dataset(vc, multivec_label)
             vc = self._setup_anndata_view_config(vc, dataset, column_name, column_label)
             vc = self._link_marker_gene(vc)

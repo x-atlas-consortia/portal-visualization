@@ -1,6 +1,6 @@
 from functools import cached_property
 
-from vitessce import AnnDataWrapper, VitessceConfig
+from vitessce import AnnDataWrapper
 from vitessce import Component as cm
 
 from ..utils import get_conf_cells, read_zip_zarr
@@ -289,9 +289,7 @@ class ObjectByAnalyteConfBuilder(ViewConfBuilder):
         # Ensure the zarr store is present
         self._zarr_path  # noqa: B018
 
-        vc = VitessceConfig(name=self._uuid, schema_version=self._schema_version)
-
-        ds = vc.add_dataset(name=self._uuid)
+        vc, ds = self._create_vitessce_config()
 
         [ds.add_object(wrapper) for wrapper in self._get_anndata_wrappers()]
 

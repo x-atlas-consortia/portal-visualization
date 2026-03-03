@@ -1,7 +1,7 @@
 import pytest
 
 try:
-    from src.portal_visualization.epic_factory import get_epic_builder
+    from src.portal_visualization.builders.epic_builders import SegmentationMaskBuilder
 
     FULL_DEPS_AVAILABLE = True
 except ImportError:
@@ -13,16 +13,46 @@ except ImportError:
 pytestmark = pytest.mark.requires_full
 
 
-@pytest.mark.parametrize(
-    ("epic_uuid", "expected"),
-    [
-        ("epic_uuid", "SegmentationMaskBuilder"),
-    ],
-)
-def test_get_epic_builder(epic_uuid, expected):
-    assert get_epic_builder(epic_uuid).__name__ == expected
+def test_segmentation_mask_builder_with_colocated_files(mocker):
+    """Test that SegmentationMaskBuilder works with base images and seg masks in the same entity."""
+    entity = {
+        "uuid": "seg-mask-uuid",
+        "status": "QA",
+        "vitessce-hints": ["segmentation_mask", "is_image", "pyramid", "epic"],
+        "files": [
+            {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/91706.ome.tif"},
+            {"rel_path": "extras/transformations/output_offsets/lab_processed/images/91706.offsets.json"},
+            {"rel_path": "extras/transformations/image_metadata/lab_processed/images/91706.metadata.json"},
+            {"rel_path": "extras/transformations/ometiff-pyramids/91706.segmentations.ome.tif"},
+            {"rel_path": "extras/transformations/output_offsets/91706.segmentations.offsets.json"},
+            {"rel_path": "extras/transformations/image_metadata/91706.segmentations.metadata.json"},
+        ],
+    }
+
+    mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value={})
+
+    builder = SegmentationMaskBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
+
+    assert builder is not None
+    assert builder._entity["uuid"] == "seg-mask-uuid"
 
 
-def test_get_epic_builder_no_uuid():
-    with pytest.raises(ValueError, match="epic_uuid must be provided"):
-        get_epic_builder(None)
+def test_segmentation_mask_builder_metadata_fallback():
+    """Test that SegmentationMaskBuilder handles missing metadata files gracefully."""
+    entity = {
+        "uuid": "seg-mask-uuid",
+        "vitessce-hints": ["segmentation_mask", "is_image", "pyramid", "epic"],
+        "files": [
+            {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/91706.ome.tif"},
+            {"rel_path": "extras/transformations/output_offsets/lab_processed/images/91706.offsets.json"},
+            # No metadata file present
+            {"rel_path": "extras/transformations/ometiff-pyramids/91706.segmentations.ome.tif"},
+            {"rel_path": "extras/transformations/output_offsets/91706.segmentations.offsets.json"},
+        ],
+    }
+
+    builder = SegmentationMaskBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
+
+    # Call internal method to test metadata fallback (returns empty dict when file not found)
+    metadata = builder._get_base_image_metadata()
+    assert metadata == {}

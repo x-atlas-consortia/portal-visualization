@@ -30,12 +30,12 @@ jobs:
 
       - name: Verify thin install works
         run: |
-          uv run python -c "from portal_visualization import has_visualization, process_hints; print('✓ Thin install imports work')"
+          uv run python -c "from portal_visualization import has_visualization, process_hints; print('Thin install imports work')"
           uv run python -c "
-          from portal_visualization.builder_factory import _get_builder_name
+          from portal_visualization.builder_factory import _get_builder_name_from_registry
           entity = {'uuid': 'test', 'vitessce-hints': ['is_image', 'rna']}
-          name = _get_builder_name(entity, lambda x: {})
-          print(f'✓ Builder name resolution works: {name}')
+          name = _get_builder_name_from_registry(entity, lambda x: {})
+          print(f'Builder name resolution works: {name}')
           assert name == 'SpatialMultiomicAnnDataZarrViewConfBuilder'
           "
 

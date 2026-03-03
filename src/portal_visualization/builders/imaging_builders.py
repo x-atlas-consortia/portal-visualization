@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 
@@ -7,7 +8,6 @@ from vitessce import (
     MultiImageWrapper,
     ObsSegmentationsOmeTiffWrapper,
     OmeTiffWrapper,
-    VitessceConfig,
     get_initial_coordination_scope_prefix,
 )
 from vitessce import (
@@ -23,7 +23,6 @@ from ..paths import (
     IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
     OFFSETS_DIR,
-    SEGMENTATION_SUBDIR,
     SEGMENTATION_SUPPORT_IMAGE_SUBDIR,
     SEQFISH_FILE_REGEX,
     SEQFISH_HYB_CYCLE_REGEX,
@@ -39,21 +38,22 @@ from ..utils import (
 )
 from .base_builders import ViewConfBuilder
 
+logger = logging.getLogger(__name__)
+
 BASE_IMAGE_VIEW_TYPE = "image"
-SEG_IMAGE_VIEW_TYPE = "seg"
 KAGGLE_IMAGE_VIEW_TYPE = "kaggle-seg"
 GEOMX_IMAGE_VIEW_TYPE = "geomx-seg"
 
 
 class AbstractImagingViewConfBuilder(ViewConfBuilder):
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
+        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
         self.image_pyramid_regex = None
         self.seg_image_pyramid_regex = None
         self.use_full_resolution = []
         self.use_physical_size_scaling = False
         self.view_type = BASE_IMAGE_VIEW_TYPE
         self.base_image_metadata = None
-        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
 
     def _get_img_and_offset_url(self, img_path, img_dir):
         """Create a url for the offsets and img.
@@ -137,7 +137,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         filtered_images = [img for img in found_images if not any(subdir in img for subdir in base_image_dirs)]
 
         if not filtered_images:
-            raise FileNotFoundError(f"Segmentation assay with uuid {self._uuid} has no matching files")
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing segmentation image pyramid files")
 
         img_url, offsets_url, metadata_url = self._get_img_and_offset_url(
             filtered_images[0], self.seg_image_pyramid_regex
@@ -182,7 +182,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
                 found_file = found_file[: -len("/.zgroup")]
             return self._build_assets_url(found_file)
         else:  # pragma: no cover
-            print(f"{file_name_to_check} file was not found.")
+            logger.warning("%s file was not found.", file_name_to_check)
             return None
 
     def _add_aoi_rois(self, dataset):
@@ -302,11 +302,11 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         found_images = get_found_images(self.image_pyramid_regex, file_paths_found)
         found_images = sorted(found_images)
         if len(found_images) == 0:  # pragma: no cover
-            message = f"Image pyramid assay with uuid {self._uuid} has no matching files"
-            raise FileNotFoundError(message)
+            raise FileNotFoundError(
+                f"Dataset {self._uuid} is missing image pyramid files matching {self.image_pyramid_regex}"
+            )
 
-        vc = VitessceConfig(name="HuBMAP Data Portal", schema_version=self._schema_version)
-        dataset = vc.add_dataset(name="Visualization Files")
+        vc, dataset = self._create_vitessce_config(dataset_name="Visualization Files")
 
         if "seg" in self.view_type:
             img_url, offsets_url, metadata_url = get_img_and_offset_url_func(found_images[0], self.image_pyramid_regex)
@@ -369,25 +369,9 @@ class ImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         return self.get_conf_cells_common(self._get_img_and_offset_url, **kwargs)
 
 
-class EpicSegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
-    """Wrapper class for creating a standard view configuration for image pyramids for EPIC segmentation mask,
-    i.e for high resolution viz-lifted imaging datasets like
-    https://portal.dev.hubmapconsortium.org/browse/dataset/df7cac7cb67a822f7007b57c4d8f5e7d
-    """
-
-    def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
-        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
-        self.image_pyramid_regex = f"{SEGMENTATION_SUBDIR}/{IMAGE_PYRAMID_DIR}/{SEGMENTATION_SUPPORT_IMAGE_SUBDIR}"
-        self.view_type = SEG_IMAGE_VIEW_TYPE
-
-    def get_conf_cells(self, **kwargs):
-        return self.get_conf_cells_common(self._get_img_and_offset_url_seg, **kwargs)
-
-
 class KaggleSegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
     """Wrapper class for creating a standard view configuration for image pyramids for kaggle-2 datasets, that show,
-    segmentation mask layered over a base image-pyramid, however, the file structure is different than
-    EPIC segmentation masks (EpicSegImagePyramidViewConfBuilder)
+    segmentation mask layered over a base image-pyramid.
     i.e for high resolution viz-lifted imaging datasets like
     https://portal.dev.hubmapconsortium.org/browse/dataset/534a590d7336aa99c7fc7afd41e995fc
     """
@@ -413,11 +397,148 @@ class KaggleSegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         return self.get_conf_cells_common(self._get_img_and_offset_url_seg, **kwargs)
 
 
+class Kaggle1SegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
+    """Builder for Kaggle-1 segmentation mask datasets (vis-lifted with parent).
+
+    Handles two cases:
+    - Base images co-located in the entity's files (same as Kaggle-2 layout)
+    - Base images only in the parent's support entity (must be fetched externally)
+
+    The builder checks own files first. If base images are found in a known
+    directory (lab_processed, processed_microscopy, etc.), it uses them directly.
+    Otherwise, it looks up the parent's support entity for the base images.
+    """
+
+    def __init__(
+        self, entity, groups_token, assets_endpoint, get_entity=None, parent=None, find_support_entity=None, **kwargs
+    ):
+        super().__init__(entity, groups_token, assets_endpoint, **kwargs)
+        self._get_entity = get_entity
+        self._parent_uuid = parent.get("uuid") if isinstance(parent, dict) else parent
+        self._find_support_entity = find_support_entity
+        self.seg_image_pyramid_regex = IMAGE_PYRAMID_DIR
+        self.view_type = KAGGLE_IMAGE_VIEW_TYPE
+        self._base_image_source = None
+
+    @property
+    def base_image_source(self):
+        """How base images were resolved: 'colocated' or 'support_entity'.
+
+        None if get_conf_cells() has not been called yet.
+        """
+        return self._base_image_source
+
+    def _has_colocated_base_images(self):
+        """Check if the entity has base images in its own files (Kaggle-2 style)."""
+        file_paths_found = self._get_file_paths()
+        paths = get_found_images_all(file_paths_found)
+        matched_dirs = {dir for dir in base_image_dirs if any(dir in img for img in paths)}
+        return matched_dirs
+
+    def get_conf_cells(self, **kwargs):
+        if self._parent_uuid is None:
+            raise ValueError("Kaggle1SegImagePyramidViewConfBuilder requires a parent dataset")
+
+        # Check if base images are co-located in own files
+        matched_dirs = self._has_colocated_base_images()
+
+        if matched_dirs:
+            # Base images found locally — use Kaggle-2 style (co-located)
+            self._base_image_source = "colocated"
+            image_dir = next(iter(matched_dirs))
+            self.image_pyramid_regex = f"{IMAGE_PYRAMID_DIR}/{image_dir}"
+            return self.get_conf_cells_common(self._get_img_and_offset_url_seg, **kwargs)
+
+        # No base images in own files — fetch from parent's support entity
+        self._base_image_source = "support_entity"
+        return self._get_conf_cells_from_support(**kwargs)
+
+    def _get_conf_cells_from_support(self, **kwargs):
+        """Generate config using base images from parent's support entity."""
+        # 1. Find the parent's support entity (has base images)
+        support_entity = self._resolve_support_entity()
+        support_uuid = support_entity.get("uuid")
+
+        # 2. Find base image in support entity's files
+        support_files = support_entity.get("files", [])
+        if not support_files and support_entity.get("metadata", {}).get("files"):
+            support_files = support_entity["metadata"]["files"]
+        support_file_paths = [f["rel_path"] for f in support_files]
+
+        found_images = list(
+            get_matches(
+                support_file_paths,
+                IMAGE_PYRAMID_DIR + r".*\.ome\.tiff?$",
+            )
+        )
+
+        if not found_images:
+            raise FileNotFoundError(f"Support entity {support_uuid} is missing base image pyramid files")
+
+        # 3. Build URLs using support entity's UUID
+        img_path = found_images[0]
+        base_img_url = self._build_support_url(support_uuid, img_path)
+
+        offsets_path = re.sub(
+            r"ome\.tiff?",
+            "offsets.json",
+            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
+        )
+        base_offsets_url = self._build_support_url(support_uuid, offsets_path)
+
+        metadata_path = re.sub(
+            r"ome\.tiff?",
+            "metadata.json",
+            re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, img_path),
+        )
+        base_metadata_url = self._build_support_url(support_uuid, metadata_path)
+
+        self.base_image_metadata = get_image_metadata(self, base_metadata_url)
+
+        # 4. Create Vitessce config with base image from support entity
+        vc, dataset = self._create_vitessce_config(dataset_name="Visualization Files")
+        dataset = dataset.add_object(
+            ImageOmeTiffWrapper(
+                img_url=base_img_url,
+                offsets_url=base_offsets_url,
+                name=Path(img_path).stem,
+            )
+        )
+
+        # 5. Add segmentation overlay from own entity files
+        self._add_segmentation_image(dataset)
+
+        # 6. Kaggle-style view setup
+        conf = self._setup_view_config(vc, dataset, self.view_type).to_dict()
+        return get_conf_cells(conf)
+
+    def _resolve_support_entity(self):
+        """Find the parent's support entity containing base images."""
+        if self._find_support_entity is not None:
+            support = self._find_support_entity(self._parent_uuid)
+            if support is not None:
+                return support
+
+        raise ValueError(
+            f"Kaggle1SegImagePyramidViewConfBuilder: could not find support entity for parent {self._parent_uuid}"
+        )
+
+    def _build_support_url(self, support_uuid, rel_path):
+        """Build an assets URL for a file in the support entity."""
+        import urllib.parse
+
+        base_url = urllib.parse.urljoin(self._assets_endpoint, f"{support_uuid}/{rel_path}")
+        if self._groups_token:
+            token_param = urllib.parse.urlencode({"token": self._groups_token})
+            return f"{base_url}?{token_param}"
+        return base_url
+
+
 class GeoMxImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
     """Wrapper class for creating a view configuration for image pyramids for GeoMx datasets, that show,
     segmentation mask layered over a base image-pyramid with AOIs and ROIs highlighted.
     i.e for high resolution viz-lifted imaging datasets like
-    TODO: add example https://portal.dev.hubmapconsortium.org/browse/dataset/
+    https://portal.hubmapconsortium.org/browse/dataset/7a009a7cca74d63e2a9e184c6c1becca
     """
 
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
@@ -474,8 +595,7 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
         full_seqfish_regex = "/".join([IMAGE_PYRAMID_DIR, SEQFISH_HYB_CYCLE_REGEX, SEQFISH_FILE_REGEX])
         found_images = get_matches(file_paths_found, full_seqfish_regex)
         if len(found_images) == 0:
-            message = f"seqFish assay with uuid {self._uuid} has no matching files"
-            raise FileNotFoundError(message)
+            raise FileNotFoundError(f"Dataset {self._uuid} is missing seqFish hybridization cycle image files")
         # Get all files grouped by PosN names.
         images_by_pos = group_by_file_name(found_images)
         confs = []
@@ -483,8 +603,7 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
         for images in images_by_pos:
             image_wrappers = []
             pos_name = self._get_pos_name(images[0])
-            vc = VitessceConfig(name=pos_name, schema_version=self._schema_version)
-            dataset = vc.add_dataset(name=pos_name)
+            vc, dataset = self._create_vitessce_config(name=pos_name, dataset_name=pos_name)
             sorted_images = sorted(images, key=self._get_hybcycle)
             for img_path in sorted_images:
                 img_url, offsets_url, _ = self._get_img_and_offset_url(img_path, IMAGE_PYRAMID_DIR)

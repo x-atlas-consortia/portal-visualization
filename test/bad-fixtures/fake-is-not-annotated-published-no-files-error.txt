@@ -1,1 +1,1 @@
-FileNotFoundError: RNA-seq assay with uuid 2a590db3d7ab1e1512816b165d95cdcf has no .zarr store at hubmap_ui/anndata-zarr/secondary_analysis.zarr
+FileNotFoundError: Dataset 2a590db3d7ab1e1512816b165d95cdcf is missing a .zarr store at hubmap_ui/anndata-zarr/secondary_analysis.zarr

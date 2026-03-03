@@ -1,6 +1,7 @@
 import urllib
 from abc import ABC, abstractmethod
 from collections import namedtuple
+from functools import cached_property
 
 ConfCells = namedtuple("ConfCells", ["conf", "cells"])
 
@@ -32,6 +33,139 @@ class ViewConfBuilder(ABC):
         self._files = []
         self._schema_version = kwargs.get("schema_version", "1.0.15")
         self._minimal = kwargs.get("minimal", False)
+
+        # Common attributes used by many builders
+        self._is_zarr_zip = False
+
+    @cached_property
+    def _zarr_accessor(self):
+        """Get ZarrStoreAccessor instance for this builder.
+        Override this if you need custom zarr access logic.
+        """
+        from ..data_access import create_zarr_accessor
+
+        return create_zarr_accessor(self)
+
+    @cached_property
+    def zarr_store(self):
+        """Open the Zarr store using ZarrStoreAccessor.
+        Override this if you need custom zarr store logic.
+        Default implementation uses ZARR_PATH or ZIP_ZARR_PATH based on _is_zarr_zip flag.
+        """
+        from ..constants import ZARR_PATH, ZIP_ZARR_PATH
+
+        zarr_path = ZIP_ZARR_PATH if self._is_zarr_zip else ZARR_PATH
+        return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
+
+    def _detect_zarr_format(self):
+        """Detect if zarr files are in .zip format and set _is_zarr_zip flag.
+        Returns True if zip format detected, False otherwise.
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "uuid", "files": [{"rel_path": "data.zarr.zip"}]},
+        ...   groups_token='token',
+        ...   assets_endpoint='https://example.com')
+        >>> builder._detect_zarr_format()
+        True
+        >>> builder._is_zarr_zip
+        True
+        """
+        file_paths = self._get_file_paths()
+        if any(".zarr.zip" in path for path in file_paths):
+            self._is_zarr_zip = True
+            return True
+        return False
+
+    def _create_vitessce_config(self, name=None, dataset_name=None):
+        """Create a VitessceConfig with standardized settings.
+
+        :param str name: Name for the config. Defaults to "HuBMAP Data Portal"
+        :param str dataset_name: Name for the dataset. Defaults to self._uuid
+        :return: Tuple of (VitessceConfig, VitessceConfigDataset)
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "test-uuid"},
+        ...   groups_token='token',
+        ...   assets_endpoint='https://example.com')
+        >>> vc, dataset = builder._create_vitessce_config()
+        >>> vc.to_dict()['name']
+        'HuBMAP Data Portal'
+        >>> type(dataset).__name__
+        'VitessceConfigDataset'
+        """
+        from vitessce import VitessceConfig
+
+        if name is None:
+            name = "HuBMAP Data Portal"
+        if dataset_name is None:
+            dataset_name = self._uuid
+
+        vc = VitessceConfig(name=name, schema_version=self._schema_version)
+        dataset = vc.add_dataset(name=dataset_name)
+        return vc, dataset
+
+    def _require_file(self, pattern, description=None):
+        """Check that a file matching the pattern exists in the entity.
+
+        :param str pattern: File path pattern to search for (supports regex via re.search)
+        :param str description: Optional description for error message
+        :raises FileNotFoundError: If no file matching pattern is found
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "test-uuid", "files": [{"rel_path": "data.zarr/.zgroup"}]},
+        ...   groups_token='token',
+        ...   assets_endpoint='https://example.com')
+        >>> builder._require_file(".zgroup")  # Returns None on success
+        >>> builder._require_file("missing.txt")  # doctest: +ELLIPSIS
+        Traceback (most recent call last):
+        ...
+        FileNotFoundError: ...
+        """
+        import re
+
+        file_paths = self._get_file_paths()
+        # Try exact match first
+        if pattern in file_paths:
+            return
+
+        # Try regex search
+        for path in file_paths:
+            if re.search(pattern, path):
+                return
+
+        # Not found - raise error
+        if description is None:
+            description = f"file matching '{pattern}'"
+        message = f"Dataset {self._uuid} is missing {description}"
+        raise FileNotFoundError(message)
+
+    def _require_files(self, patterns, description=None):
+        """Check that all files in the list exist in the entity.
+
+        :param list patterns: List of file path patterns to search for
+        :param str description: Optional description for error message
+        :raises FileNotFoundError: If any file is missing
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "test", "files": [{"rel_path": "a.json"}, {"rel_path": "b.json"}]},
+        ...   groups_token='token',
+        ...   assets_endpoint='https://example.com')
+        >>> builder._require_files(["a.json", "b.json"])
+        >>> builder._require_files(["a.json", "missing.json"])  # doctest: +ELLIPSIS
+        Traceback (most recent call last):
+        ...
+        FileNotFoundError: ...
+        """
+        file_paths = self._get_file_paths()
+        file_paths_set = set(file_paths)
+
+        # Check if all expected files exist
+        missing = [p for p in patterns if p not in file_paths_set]
+        if missing:
+            if description is None:
+                description = f"required files: {missing}"
+            message = f"Dataset {self._uuid} is missing {description}"
+            raise FileNotFoundError(message)
 
     @abstractmethod
     def get_conf_cells(self, **kwargs):  # pragma: no cover
