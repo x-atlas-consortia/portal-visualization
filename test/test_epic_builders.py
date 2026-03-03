@@ -37,10 +37,11 @@ def test_segmentation_mask_builder_with_colocated_files(mocker):
     assert builder._entity["uuid"] == "seg-mask-uuid"
 
 
-def test_segmentation_mask_builder_metadata_fallback():
+def test_segmentation_mask_builder_metadata_fallback(mocker):
     """Test that SegmentationMaskBuilder handles missing metadata files gracefully."""
     entity = {
         "uuid": "seg-mask-uuid",
+        "status": "QA",
         "vitessce-hints": ["segmentation_mask", "is_image", "pyramid", "epic"],
         "files": [
             {"rel_path": "extras/transformations/ometiff-pyramids/lab_processed/images/91706.ome.tif"},
@@ -51,8 +52,10 @@ def test_segmentation_mask_builder_metadata_fallback():
         ],
     }
 
+    mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
+
     builder = SegmentationMaskBuilder(entity, groups_token="token", assets_endpoint="https://example.com")
 
-    # Call internal method to test metadata fallback (returns empty dict when file not found)
+    # Call internal method to test metadata fallback (returns None when metadata unavailable)
     metadata = builder._get_base_image_metadata()
-    assert metadata == {}
+    assert metadata is None
