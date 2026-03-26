@@ -1,7 +1,12 @@
+import io
+import json
 import logging
 import re
+import zipfile
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
+import requests
 from vitessce import (
     AnnDataWrapper,
     ImageOmeTiffWrapper,
@@ -44,6 +49,16 @@ BASE_IMAGE_VIEW_TYPE = "image"
 KAGGLE_IMAGE_VIEW_TYPE = "kaggle-seg"
 GEOMX_IMAGE_VIEW_TYPE = "geomx-seg"
 
+# Deterministic color palette for segmentation channels.
+SEGMENTATION_CHANNEL_COLORS = [
+    [155, 165, 31],
+    [31, 119, 180],
+    [227, 66, 52],
+    [44, 160, 44],
+    [148, 103, 189],
+    [255, 127, 14],
+]
+
 
 class AbstractImagingViewConfBuilder(ViewConfBuilder):
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
@@ -54,6 +69,8 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         self.use_physical_size_scaling = False
         self.view_type = BASE_IMAGE_VIEW_TYPE
         self.base_image_metadata = None
+        self.seg_channel_count = 1
+        self.seg_channel_names = None
 
     def _get_img_and_offset_url(self, img_path, img_dir):
         """Create a url for the offsets and img.
@@ -204,6 +221,83 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         dataset.add_object(region_zarr)
         dataset.add_object(area_zarr)
 
+    def _get_seg_channel_info(self):  # pragma: no cover
+        """Fetch segmentation channel names and count from the AOI zarr's segment categories.
+
+        Reads obs/segment/categories/.zarray (metadata) and obs/segment/categories/0 (data)
+        from the AOI zarr, then decodes the binary chunk to get channel name strings.
+        Falls back to count-only from shape[0], or to 1 on any error.
+        """
+        from numcodecs import Blosc, VLenUTF8
+
+        try:
+            area_zarr_url = self._get_url_for_path(self.segment_files_regex, "aoi.zarr", zip_check=True)
+            if not area_zarr_url:
+                return
+
+            request_init = self._get_request_init() or {}
+
+            if self._is_zarr_zip:
+                response = requests.get(area_zarr_url, **request_init)
+                if response.status_code != 200:
+                    logger.warning("Failed to fetch AOI zarr zip: %s", response.status_code)
+                    return
+                zf = zipfile.ZipFile(io.BytesIO(response.content))
+                zarray_data = json.loads(zf.read("obs/segment/categories/.zarray"))
+                chunk_bytes = zf.read("obs/segment/categories/0")
+            else:
+                parsed = urlparse(area_zarr_url)
+
+                zarray_path = f"{parsed.path}/obs/segment/categories/.zarray"
+                zarray_url = urlunparse(parsed._replace(path=zarray_path))
+                response = requests.get(zarray_url, **request_init)
+                if response.status_code != 200:
+                    logger.warning("Failed to fetch segment categories .zarray: %s", response.status_code)
+                    return
+                zarray_data = response.json()
+
+                chunk_path = f"{parsed.path}/obs/segment/categories/0"
+                chunk_url = urlunparse(parsed._replace(path=chunk_path))
+                chunk_response = requests.get(chunk_url, **request_init)
+                if chunk_response.status_code != 200:
+                    logger.warning("Failed to fetch segment categories chunk: %s", chunk_response.status_code)
+                    self.seg_channel_count = zarray_data["shape"][0]
+                    return
+                chunk_bytes = chunk_response.content
+
+            # Decode the binary chunk using compressor and filter from .zarray metadata
+            compressor_config = zarray_data.get("compressor")
+            if compressor_config:
+                decompressed = Blosc(**{k: v for k, v in compressor_config.items() if k != "id"}).decode(chunk_bytes)
+            else:
+                decompressed = chunk_bytes
+
+            names = list(VLenUTF8().decode(decompressed))
+            self.seg_channel_names = names
+            self.seg_channel_count = len(names)
+        except Exception as e:
+            logger.warning("Could not determine segment channel info from AOI zarr: %s", e)
+
+    def _build_segmentation_channel_entries(self):
+        """Build segmentation channel coordination entries based on channel count."""
+        entries = []
+        for i in range(self.seg_channel_count):
+            color = SEGMENTATION_CHANNEL_COLORS[i % len(SEGMENTATION_CHANNEL_COLORS)]
+            entries.append(
+                {
+                    "spatialTargetC": i,
+                    "obsType": self.seg_channel_names[i] if self.seg_channel_names else f"Segment {i}",
+                    "spatialChannelColor": color,
+                    "spatialChannelOpacity": 0.8,
+                    "obsHighlight": None,
+                    "spatialChannelVisible": True,
+                    "obsColorEncoding": "spatialChannelColor",
+                    "spatialSegmentationFilled": True,
+                    "spatialSegmentationStrokeWidth": 0.01,
+                }
+            )
+        return entries
+
     def _setup_view_config(self, vc, dataset, view_type, disable_3d=[], use_full_resolution=[]):
         if view_type == BASE_IMAGE_VIEW_TYPE:
             vc.add_view(cm.SPATIAL, dataset=dataset, x=3, y=0, w=9, h=12).set_props(
@@ -274,21 +368,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
                             "fileUid": "segmentations",
                             "spatialLayerOpacity": 1.0,
                             "spatialLayerVisible": True,
-                            "segmentationChannel": CL(
-                                [
-                                    {
-                                        "spatialTargetC": 0,
-                                        "obsType": "Full ROI",
-                                        "spatialChannelColor": [155, 165, 31],
-                                        "spatialChannelOpacity": 0.8,
-                                        "obsHighlight": None,
-                                        "spatialChannelVisible": True,
-                                        "obsColorEncoding": "spatialChannelColor",
-                                        "spatialSegmentationFilled": True,
-                                        "spatialSegmentationStrokeWidth": 0.01,
-                                    },
-                                ]
-                            ),
+                            "segmentationChannel": CL(self._build_segmentation_channel_entries()),
                         }
                     ]
                 ),
@@ -346,6 +426,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
         if self.view_type == GEOMX_IMAGE_VIEW_TYPE:
             self._add_aoi_rois(dataset)
+            self._get_seg_channel_info()
         conf = self._setup_view_config(
             vc, dataset, self.view_type, use_full_resolution=self.use_full_resolution
         ).to_dict()
