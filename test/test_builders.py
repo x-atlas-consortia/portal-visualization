@@ -2173,7 +2173,7 @@ def test_geomx_multi_channel_segmentation(mocker):
         if "obsSegmentations" in scope_name and "segmentationLayer" in scope_val:
             seg_layer = scope_val["segmentationLayer"]
             seg_channels = seg_layer.get("segmentationChannel", {})
-            for layer_scope, channel_list in seg_channels.items():
+            for _layer_scope, channel_list in seg_channels.items():
                 assert len(channel_list) == 3
 
 
