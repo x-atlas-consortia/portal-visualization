@@ -2079,6 +2079,104 @@ def test_kaggle1_builder_base_image_source_colocated(mocker):
     assert builder.base_image_source == "colocated"
 
 
+@pytest_requires_full
+def test_geomx_multi_channel_segmentation(mocker):
+    """Test that GeoMx builder produces N segmentation channel scopes when the AOI zarr
+    has N segment categories."""
+    from .fixtures import make_entity
+
+    entity = make_entity(
+        uuid="geomx-multi-channel-test",
+        status="QA",
+        soft_assaytype="",
+        data_types=["Histology"],
+        hints=["geomx", "is_image"],
+        files=[
+            {"rel_path": "ometiff-pyramids/test.segmentations.ome.tif"},
+            {"rel_path": "ometiff-pyramids/lab_processed/images/test.ome.tif"},
+            {"rel_path": "output_offsets/test.segmentations.offsets.json"},
+            {"rel_path": "output_offsets/lab_processed/images/test.offsets.json"},
+            {"rel_path": "image_metadata/test.segmentations.metadata.json"},
+            {"rel_path": "image_metadata/lab_processed/images/test.metadata.json"},
+            {"rel_path": "output_ome_segments/test.obsSegmentations.json"},
+            {"rel_path": "output_ome_segments/test.roi.zarr/.zgroup"},
+            {"rel_path": "output_ome_segments/test.aoi.zarr/.zgroup"},
+        ],
+        immediate_ancestors=[{"data_types": ["Histology"]}],
+    )
+
+    mocker.patch(
+        "src.portal_visualization.builders.imaging_builders.get_image_metadata",
+        return_value=None,
+    )
+
+    # Build encoded binary chunk with channel names using numcodecs
+    import numpy as np
+    from numcodecs import Blosc, VLenUTF8
+
+    channel_names = ["Endothelial", "Others", "Trophoblast"]
+    encoded = VLenUTF8().encode(np.array(channel_names, dtype=object))
+    compressed = Blosc(cname="lz4", clevel=5, shuffle=1).encode(encoded)
+
+    zarray_metadata = {
+        "chunks": [3],
+        "compressor": {"blocksize": 0, "clevel": 5, "cname": "lz4", "id": "blosc", "shuffle": 1},
+        "dtype": "|O",
+        "fill_value": 0,
+        "filters": [{"id": "vlen-utf8"}],
+        "order": "C",
+        "shape": [3],
+        "zarr_format": 2,
+    }
+
+    # Mock requests.get to return different responses based on URL
+    def mock_get(url, **kwargs):
+        resp = mocker.Mock()
+        if ".zarray" in url:
+            resp.status_code = 200
+            resp.json.return_value = zarray_metadata
+        elif "/categories/0" in url:
+            resp.status_code = 200
+            resp.content = bytes(compressed)
+        else:
+            resp.status_code = 404
+        return resp
+
+    mocker.patch("src.portal_visualization.builders.imaging_builders.requests.get", side_effect=mock_get)
+
+    Builder = get_view_config_builder(entity, get_entity)
+    builder = Builder(entity, groups_token, assets_url, get_entity=get_entity)
+    conf, _ = builder.get_conf_cells()
+
+    assert conf is not None
+
+    coord_space = conf["coordinationSpace"]
+
+    # Should have 3 segmentation channel scopes
+    seg_channel_scopes = coord_space.get("segmentationChannel", {})
+    obs_seg_scopes = {k: v for k, v in seg_channel_scopes.items() if "obsSegmentations" in k}
+    assert len(obs_seg_scopes) == 3
+
+    # Verify spatialTargetC has values 0, 1, 2
+    target_c = coord_space.get("spatialTargetC", {})
+    obs_seg_target_c = {k: v for k, v in target_c.items() if "obsSegmentations" in k}
+    assert sorted(obs_seg_target_c.values()) == [0, 1, 2]
+
+    # Verify obsType has the actual channel names
+    obs_type = coord_space.get("obsType", {})
+    obs_seg_types = {k: v for k, v in obs_type.items() if "obsSegmentations" in k}
+    assert sorted(obs_seg_types.values()) == sorted(channel_names)
+
+    # Verify segmentationLayer references all 3 channels
+    meta_by = coord_space.get("metaCoordinationScopesBy", {})
+    for scope_name, scope_val in meta_by.items():
+        if "obsSegmentations" in scope_name and "segmentationLayer" in scope_val:
+            seg_layer = scope_val["segmentationLayer"]
+            seg_channels = seg_layer.get("segmentationChannel", {})
+            for layer_scope, channel_list in seg_channels.items():
+                assert len(channel_list) == 3
+
+
 if __name__ == "__main__":  # pragma: no cover
     parser = argparse.ArgumentParser(description="Generate fixtures")
     parser.add_argument("--input", required=True, type=Path, help="Input JSON path")
