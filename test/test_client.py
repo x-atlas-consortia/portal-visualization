@@ -236,6 +236,36 @@ def test_get_entities_paginates(app, mocker):
         assert len(entities) == 10001
 
 
+def test_get_entities_pagination_empty_page(app, mocker):
+    """Cover the `if not hits: break` branch when a page returns no results."""
+    mock_es_empty_page = {"hits": {"total": {"value": 10001}, "hits": []}}
+    call_count = 0
+
+    def side_effect(path, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        data = mock_es_more_than_10k if call_count == 1 else mock_es_empty_page
+
+        class MockResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.text = "Logger call requires this"
+
+            def json(self):
+                return data
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    mocker.patch("requests.post", side_effect=side_effect)
+    with app.app_context():
+        api_client = ApiClient()
+        entities = api_client.get_entities("datasets")
+        assert len(entities) == 10000
+
+
 def test_get_entities_with_post_filter_extra(app, mocker):
     mocker.patch("requests.post", side_effect=mock_es_post)
     with app.app_context():
