@@ -361,3 +361,10 @@ def test_get_metadata_descriptions(app, mocker):
         api_client = ApiClient()
         metadata_descriptions = api_client.get_metadata_descriptions()
         assert metadata_descriptions == mock_es
+
+def test_get_metadata_field_types(app, mocker):
+    mocker.patch("requests.get", side_effect=mock_get_s3_json_file)
+    with app.app_context():
+        api_client = ApiClient()
+        metadata_types = api_client.get_metadata_field_types()
+        assert metadata_types == mock_es
