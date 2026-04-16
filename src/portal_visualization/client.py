@@ -135,11 +135,20 @@ class ApiClient:
         constraints={},
         uuids=[],
         query_override=None,
+        post_filter_extra=None,
     ):
         entity_type = plural_lc_entity_type[:-1].capitalize()
+        page_size = 10000  # ES max result window
+        entity_type_filter = {"term": {"entity_type.keyword": entity_type}}
+        if post_filter_extra:
+            post_filter = {"bool": {"must": [entity_type_filter, post_filter_extra]}}
+        else:
+            post_filter = entity_type_filter
         query = {
-            "size": 10000,  # Default ES limit,
-            "post_filter": {"term": {"entity_type.keyword": entity_type}},
+            "size": page_size,
+            "sort": [{"_id": "asc"}],
+            "track_total_hits": True,
+            "post_filter": post_filter,
             "query": query_override or _make_query(constraints, uuids),
             "_source": {
                 "include": [*non_metadata_fields, "mapped_metadata", "metadata"],
@@ -147,10 +156,20 @@ class ApiClient:
             },
         }
         response_json = self._request(self.elasticsearch_url, body_json=query)
-        sources = [hit["_source"] for hit in _get_hits(response_json)]
+        hits = _get_hits(response_json)
+        sources = [hit["_source"] for hit in hits]
         total_hits = response_json["hits"]["total"]["value"]
-        if len(sources) < total_hits:
-            raise Exception("Incomplete results: need to make multiple requests")
+
+        # Paginate with search_after if there are more results than one page
+        while len(sources) < total_hits:
+            search_after = hits[-1]["sort"]
+            query["search_after"] = search_after
+            response_json = self._request(self.elasticsearch_url, body_json=query)
+            hits = _get_hits(response_json)
+            if not hits:
+                break
+            sources.extend(hit["_source"] for hit in hits)
+
         flat_sources = _flatten_sources(sources, non_metadata_fields)
         filled_flat_sources = _fill_sources(flat_sources)
         return filled_flat_sources
