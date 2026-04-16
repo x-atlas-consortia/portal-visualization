@@ -329,6 +329,10 @@ class ApiClient:
     def get_metadata_descriptions(self):
         return self._get_ubkg("field-descriptions")
 
+    # Retrieves field types from the UBKG API
+    def get_metadata_field_types(self):
+        return self._get_ubkg("field-types")
+
 
 def _make_query(constraints, uuids):
     """
