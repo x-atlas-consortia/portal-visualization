@@ -158,7 +158,14 @@ def test_get_all_dataset_uuids(app, mocker):
 mock_es_more_than_10k = {
     "hits": {
         "total": {"value": 10001},
-        "hits": [{"_id": f"ABC{i}", "_source": mock_hit_source} for i in range(10000)],
+        "hits": [{"_id": f"ABC{i}", "_source": mock_hit_source, "sort": [f"ABC{i}"]} for i in range(10000)],
+    }
+}
+
+mock_es_page_2 = {
+    "hits": {
+        "total": {"value": 10001},
+        "hits": [{"_id": "ABC10000", "_source": mock_hit_source, "sort": ["ABC10000"]}],
     }
 }
 
@@ -176,6 +183,31 @@ def mock_es_post_more_than_10k(path, **kwargs):
             pass
 
     return MockResponse()
+
+
+def _mock_es_post_paginated():
+    """Returns a side_effect function that returns page 1 then page 2."""
+    call_count = 0
+
+    def side_effect(path, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        data = mock_es_more_than_10k if call_count == 1 else mock_es_page_2
+
+        class MockResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.text = "Logger call requires this"
+
+            def json(self):
+                return data
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    return side_effect
 
 
 def test_get_dataset_uuids_more_than_10k(app, mocker):
@@ -196,13 +228,23 @@ def test_get_entities(app, mocker, plural_lc_entity_type):
         assert json.dumps(entities, indent=2) == json.dumps([flattened_hit_source], indent=2)
 
 
-def test_get_entities_more_than_10k(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post_more_than_10k)
+def test_get_entities_paginates(app, mocker):
+    mocker.patch("requests.post", side_effect=_mock_es_post_paginated())
     with app.app_context():
         api_client = ApiClient()
-        with pytest.raises(Exception) as error_info:  # noqa: PT011, PT012
-            api_client.get_entities("datasets")
-            assert error_info.match("At least 10k datasets")  # pragma: no cover
+        entities = api_client.get_entities("datasets")
+        assert len(entities) == 10001
+
+
+def test_get_entities_with_post_filter_extra(app, mocker):
+    mocker.patch("requests.post", side_effect=mock_es_post)
+    with app.app_context():
+        api_client = ApiClient()
+        entities = api_client.get_entities(
+            "samples",
+            post_filter_extra={"exists": {"field": "descendant_counts.entity_type.Dataset"}},
+        )
+        assert len(entities) == 1
 
 
 @pytest.mark.parametrize("params", [{"uuid": "uuid"}, {"hbm_id": "hubmap_id"}])
