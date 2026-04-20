@@ -277,6 +277,79 @@ def test_get_entities_with_post_filter_extra(app, mocker):
         assert len(entities) == 1
 
 
+def test_get_entities_post_filter_extra_merges_bool_clause(app, mocker):
+    """A `bool` post_filter_extra should have its `should`/`must_not` clauses preserved
+    and its `must` array merged with the entity_type filter (not nested)."""
+    captured = {}
+
+    def side_effect(path, **kwargs):
+        captured["body"] = kwargs.get("json")
+
+        class MockResponse:
+            status_code = 200
+            text = "Logger call requires this"
+
+            def json(self):
+                return mock_es
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    mocker.patch("requests.post", side_effect=side_effect)
+    with app.app_context():
+        api_client = ApiClient()
+        api_client.get_entities(
+            "samples",
+            post_filter_extra={
+                "bool": {
+                    "must": [{"term": {"a": "1"}}],
+                    "should": [{"term": {"b": "2"}}],
+                    "must_not": [{"term": {"c": "3"}}],
+                }
+            },
+        )
+
+    post_filter = captured["body"]["post_filter"]
+    assert post_filter["bool"]["must"] == [
+        {"term": {"entity_type.keyword": "Sample"}},
+        {"term": {"a": "1"}},
+    ]
+    assert post_filter["bool"]["should"] == [{"term": {"b": "2"}}]
+    assert post_filter["bool"]["must_not"] == [{"term": {"c": "3"}}]
+
+
+def test_get_entities_pagination_safety_limit(app, mocker):
+    """If total_hits keeps claiming more results than pages deliver, the loop must
+    bail out instead of spinning forever."""
+    single_hit_page = {
+        "hits": {
+            "total": {"value": 10_000_000},
+            "hits": [{"_id": "ABC", "_source": mock_hit_source, "sort": ["ABC"]}],
+        }
+    }
+
+    def side_effect(path, **kwargs):
+        class MockResponse:
+            status_code = 200
+            text = "Logger call requires this"
+
+            def json(self):
+                return single_hit_page
+
+            def raise_for_status(self):
+                pass
+
+        return MockResponse()
+
+    mocker.patch("requests.post", side_effect=side_effect)
+    with app.app_context():
+        api_client = ApiClient()
+        with pytest.raises(Exception, match="Pagination safety limit"):
+            api_client.get_entities("datasets")
+
+
 @pytest.mark.parametrize("params", [{"uuid": "uuid"}, {"hbm_id": "hubmap_id"}])
 def test_get_entity(app, mocker, params):
     mocker.patch("requests.post", side_effect=mock_es_post)

@@ -141,7 +141,19 @@ class ApiClient:
         page_size = 10000  # ES max result window
         entity_type_filter = {"term": {"entity_type.keyword": entity_type}}
         if post_filter_extra:
-            post_filter = {"bool": {"must": [entity_type_filter, post_filter_extra]}}
+            # If the caller passed a bool clause, merge our entity_type filter into
+            # its `must` array so their `should`/`must_not`/`filter` clauses are preserved.
+            # Otherwise, wrap the single clause alongside entity_type in a new bool.must.
+            if "bool" in post_filter_extra:
+                extra_bool = post_filter_extra["bool"]
+                post_filter = {
+                    "bool": {
+                        **extra_bool,
+                        "must": [entity_type_filter, *extra_bool.get("must", [])],
+                    }
+                }
+            else:
+                post_filter = {"bool": {"must": [entity_type_filter, post_filter_extra]}}
         else:
             post_filter = entity_type_filter
         query = {
@@ -160,8 +172,18 @@ class ApiClient:
         sources = [hit["_source"] for hit in hits]
         total_hits = response_json["hits"]["total"]["value"]
 
-        # Paginate with search_after if there are more results than one page
+        # Paginate with search_after if there are more results than one page.
+        # Safety bound prevents runaway loops if ES returns a stale total_hits
+        # or a broken page_size contract. Realistically should never happen,
+        # but there's no harm in being defensive here.
+        max_pages = 1000
+        page_count = 1
         while len(sources) < total_hits:
+            if page_count >= max_pages:
+                raise Exception(
+                    f"Pagination safety limit of {max_pages} pages exceeded "
+                    f"for {plural_lc_entity_type} (got {len(sources)} of {total_hits})"
+                )
             search_after = hits[-1]["sort"]
             query["search_after"] = search_after
             response_json = self._request(self.elasticsearch_url, body_json=query)
@@ -169,6 +191,7 @@ class ApiClient:
             if not hits:
                 break
             sources.extend(hit["_source"] for hit in hits)
+            page_count += 1
 
         flat_sources = _flatten_sources(sources, non_metadata_fields)
         filled_flat_sources = _fill_sources(flat_sources)
