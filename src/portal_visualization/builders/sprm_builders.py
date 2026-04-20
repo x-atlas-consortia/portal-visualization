@@ -191,10 +191,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             self._is_zarr_zip = True
             zarr_path = f"{zarr_path}.zip"
         else:  # pragma: no cover
-            try:
-                self._require_file(f"{zarr_path}/.zgroup", f"a .zarr store at {zarr_path}")
-            except FileNotFoundError:
-                raise
+            self._require_zarr_store(zarr_path)
         adata_url = self._build_assets_url(zarr_path, use_token=False)
 
         additional_cluster_names = list(self.zarr_store().get("uns/cluster_columns", []))

@@ -139,6 +139,41 @@ class ViewConfBuilder(ABC):
         message = f"Dataset {self._uuid} is missing {description}"
         raise FileNotFoundError(message)
 
+    def _require_zarr_store(self, zarr_path, description=None):
+        """Check that a zarr store exists at the given path.
+
+        Accepts either a zarr v2 store (marked by a ``.zgroup`` file at the root)
+        or a zarr v3 store (marked by a ``zarr.json`` file at the root).
+
+        :param str zarr_path: Path to the zarr store root
+        :param str description: Optional description for the error message
+        :raises FileNotFoundError: If neither marker file is present
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "u", "files": [{"rel_path": "data.zarr/.zgroup"}]},
+        ...   groups_token='token', assets_endpoint='https://example.com')
+        >>> builder._require_zarr_store("data.zarr")  # v2 marker
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "u", "files": [{"rel_path": "data.zarr/zarr.json"}]},
+        ...   groups_token='token', assets_endpoint='https://example.com')
+        >>> builder._require_zarr_store("data.zarr")  # v3 marker
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={"uuid": "u", "files": [{"rel_path": "other.txt"}]},
+        ...   groups_token='token', assets_endpoint='https://example.com')
+        >>> builder._require_zarr_store("data.zarr")  # doctest: +ELLIPSIS
+        Traceback (most recent call last):
+        ...
+        FileNotFoundError: ...
+        """
+        file_paths = set(self._get_file_paths())
+        if f"{zarr_path}/.zgroup" in file_paths or f"{zarr_path}/zarr.json" in file_paths:
+            return
+        if description is None:
+            description = f"a .zarr store at {zarr_path}"
+        raise FileNotFoundError(f"Dataset {self._uuid} is missing {description}")
+
     def _require_files(self, patterns, description=None):
         """Check that all files in the list exist in the entity.
 
