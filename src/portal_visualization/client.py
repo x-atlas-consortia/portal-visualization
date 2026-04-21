@@ -38,6 +38,48 @@ def _get_hits(response_json):
     return inner_hits
 
 
+def _paginate_search_after(request_fn, query, description, max_pages=1000):
+    """
+    Run an Elasticsearch query and follow ``search_after`` pagination until all hits
+    are collected. Returns the flat list of hits across all pages.
+
+    The caller's ``query`` dict is mutated: a default ``sort`` of ``[{"_id": "asc"}]``
+    is inserted if none is provided (required for search_after), ``track_total_hits``
+    is enabled, and ``search_after`` is updated each iteration.
+
+    :param callable request_fn: takes the query dict and returns the parsed response JSON
+    :param dict query: the base ES query; must include ``size``
+    :param str description: used in the safety-limit error message
+    :param int max_pages: safety bound to prevent runaway loops if ES returns a stale
+        ``total_hits`` or a broken ``size`` contract
+    :return: list of hits across all pages
+    """
+    query.setdefault("sort", [{"_id": "asc"}])
+    query.setdefault("track_total_hits", True)
+
+    response_json = request_fn(query)
+    hits = _get_hits(response_json)
+    total_hits = response_json["hits"]["total"]["value"]
+    all_hits = list(hits)
+
+    page_count = 1
+    while len(all_hits) < total_hits:
+        if page_count >= max_pages:
+            raise Exception(
+                f"Pagination safety limit of {max_pages} pages exceeded "
+                f"for {description} (got {len(all_hits)} of {total_hits})"
+            )
+        query["search_after"] = hits[-1]["sort"]
+        response_json = request_fn(query)
+        hits = _get_hits(response_json)
+        if not hits:
+            break
+        all_hits.extend(hits)
+        page_count += 1
+
+    return all_hits
+
+
 def _handle_request(url, headers=None, body_json=None):
     try:
         response = (
@@ -113,20 +155,17 @@ class ApiClient:
         return response.json()
 
     def get_all_dataset_uuids(self):
-        size = 10000  # Default ES limit
         query = {
-            "size": size,
+            "size": 10000,  # ES max result window
             "post_filter": {"term": {"entity_type.keyword": "Dataset"}},
             "_source": ["empty-returns-everything"],
         }
-        response_json = self._request(
-            self.elasticsearch_url,
-            body_json=query,
+        hits = _paginate_search_after(
+            lambda q: self._request(self.elasticsearch_url, body_json=q),
+            query,
+            description="datasets",
         )
-        uuids = [hit["_id"] for hit in _get_hits(response_json)]
-        if len(uuids) == size:
-            raise Exception("At least 10k datasets: need to make multiple requests")
-        return uuids
+        return [hit["_id"] for hit in hits]
 
     def get_entities(
         self,
@@ -135,22 +174,43 @@ class ApiClient:
         constraints={},
         uuids=[],
         query_override=None,
+        post_filter_extra=None,
     ):
         entity_type = plural_lc_entity_type[:-1].capitalize()
+        page_size = 10000  # ES max result window
+        entity_type_filter = {"term": {"entity_type.keyword": entity_type}}
+        if post_filter_extra:
+            # If the caller passed a bool clause, merge our entity_type filter into
+            # its `must` array so their `should`/`must_not`/`filter` clauses are preserved.
+            # Otherwise, wrap the single clause alongside entity_type in a new bool.must.
+            if "bool" in post_filter_extra:
+                extra_bool = post_filter_extra["bool"]
+                post_filter = {
+                    "bool": {
+                        **extra_bool,
+                        "must": [entity_type_filter, *extra_bool.get("must", [])],
+                    }
+                }
+            else:
+                post_filter = {"bool": {"must": [entity_type_filter, post_filter_extra]}}
+        else:
+            post_filter = entity_type_filter
         query = {
-            "size": 10000,  # Default ES limit,
-            "post_filter": {"term": {"entity_type.keyword": entity_type}},
+            "size": page_size,
+            "post_filter": post_filter,
             "query": query_override or _make_query(constraints, uuids),
             "_source": {
                 "include": [*non_metadata_fields, "mapped_metadata", "metadata"],
                 "exclude": ["*.files"],
             },
         }
-        response_json = self._request(self.elasticsearch_url, body_json=query)
-        sources = [hit["_source"] for hit in _get_hits(response_json)]
-        total_hits = response_json["hits"]["total"]["value"]
-        if len(sources) < total_hits:
-            raise Exception("Incomplete results: need to make multiple requests")
+        hits = _paginate_search_after(
+            lambda q: self._request(self.elasticsearch_url, body_json=q),
+            query,
+            description=plural_lc_entity_type,
+        )
+        sources = [hit["_source"] for hit in hits]
+
         flat_sources = _flatten_sources(sources, non_metadata_fields)
         filled_flat_sources = _fill_sources(flat_sources)
         return filled_flat_sources
@@ -328,6 +388,10 @@ class ApiClient:
     # Retrieves field descriptions from the UBKG API
     def get_metadata_descriptions(self):
         return self._get_ubkg("field-descriptions")
+
+    # Retrieves field types from the UBKG API
+    def get_metadata_field_types(self):
+        return self._get_ubkg("field-types")
 
 
 def _make_query(constraints, uuids):

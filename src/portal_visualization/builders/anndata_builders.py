@@ -133,14 +133,12 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
 
     def get_conf_cells(self, marker=None):
         file_paths_found = [file["rel_path"] for file in self._entity["files"]]
-        # Use .zgroup file as proxy for whether or not the zarr store is present.
+        # Use the zarr store marker file (.zgroup for v2, zarr.json for v3) as a proxy
+        # for whether or not the zarr store is present.
         if f"{ZARR_PATH}.zip" in file_paths_found:
             self._is_zarr_zip = True
         else:
-            try:
-                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
-            except FileNotFoundError:
-                raise
+            self._require_zarr_store(ZARR_PATH)
         self._is_annotated = self.is_annotated
         if self._scatterplot_w is None:
             self._scatterplot_w = self.compute_scatterplot_w()
@@ -550,10 +548,7 @@ class SpatialMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewCon
             zarr_path = ZIP_ZARR_PATH
 
         else:  # pragma: no cover
-            try:
-                self._require_file(f"{ZARR_PATH}/.zgroup", f"a .zarr store at {ZARR_PATH}")
-            except FileNotFoundError:
-                raise
+            self._require_zarr_store(ZARR_PATH)
         adata_url = self._build_assets_url(zarr_path, use_token=False)
         image_url = self._build_assets_url("ometiff-pyramids/visium_histology_hires_pyramid.ome.tif", use_token=True)
         offsets_url = self._build_assets_url(
@@ -603,10 +598,7 @@ class XeniumMultiomicAnnDataZarrViewConfBuilder(SpatialRNASeqAnnDataZarrViewConf
 
         else:  # pragma: no cover
             if self._is_zarr_zip is False or self._is_spatial_zarr_zip is False:
-                try:
-                    self._require_file(f"{zarr_path}/.zgroup", f"a .zarr store at {zarr_path}")
-                except FileNotFoundError:
-                    raise
+                self._require_zarr_store(zarr_path)
         return self._build_assets_url(zarr_path, use_token=False)
 
     def _set_xenium_datasets(self, vc, adata_url, spatial_data_url):
