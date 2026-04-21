@@ -170,21 +170,6 @@ mock_es_page_2 = {
 }
 
 
-def mock_es_post_more_than_10k(path, **kwargs):
-    class MockResponse:
-        def __init__(self):
-            self.status_code = 200
-            self.text = "Logger call requires this"
-
-        def json(self):
-            return mock_es_more_than_10k
-
-        def raise_for_status(self):
-            pass
-
-    return MockResponse()
-
-
 def _mock_es_post_paginated():
     """Returns a side_effect function that returns page 1 then page 2."""
     call_count = 0
@@ -211,12 +196,13 @@ def _mock_es_post_paginated():
 
 
 def test_get_dataset_uuids_more_than_10k(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post_more_than_10k)
+    mocker.patch("requests.post", side_effect=_mock_es_post_paginated())
     with app.app_context():
         api_client = ApiClient()
-        with pytest.raises(Exception) as error_info:  # noqa: PT011, PT012
-            api_client.get_all_dataset_uuids()
-            assert error_info.match("At least 10k datasets")  # pragma: no cover
+        uuids = api_client.get_all_dataset_uuids()
+    assert len(uuids) == 10001
+    assert uuids[0] == "ABC0"
+    assert uuids[-1] == "ABC10000"
 
 
 @pytest.mark.parametrize("plural_lc_entity_type", ["datasets", "samples", "donors"])
