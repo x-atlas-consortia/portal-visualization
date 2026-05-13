@@ -474,14 +474,24 @@ def _flatten_sources(sources, non_metadata_fields):
     ...     }]
     >>> pp(_flatten_sources(sample_sources, ['uuid', 'name']))
     [{'uuid': 'abcd1234', 'name': None, 'organ': 'belly button'}]
+
+    Some non-public entities are returned by ES with ``metadata`` or
+    ``mapped_metadata`` explicitly set to ``None`` rather than absent;
+    ``dict.get(key, {})`` returns ``None`` in that case, so coalesce here.
+
+    >>> null_metadata_sources = [
+    ...     {'uuid': 'abcd1234', 'metadata': None, 'mapped_metadata': None}
+    ... ]
+    >>> pp(_flatten_sources(null_metadata_sources, ['uuid']))
+    [{'uuid': 'abcd1234'}]
     """
     flat_sources = [
         {
             **{field: _get_nested(field, source) for field in non_metadata_fields},
             # This gets sample and donor metadata.
-            **source.get("metadata", {}),
+            **(source.get("metadata") or {}),
             # This gets donor metadata, and concatenates nested lists.
-            **{k: ", ".join(str(s) for s in v) for (k, v) in source.get("mapped_metadata", {}).items()},
+            **{k: ", ".join(str(s) for s in v) for (k, v) in (source.get("mapped_metadata") or {}).items()},
         }
         for source in sources
     ]
