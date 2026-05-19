@@ -131,6 +131,27 @@ def test_get_descendant_to_lift_error(app, mocker):
     assert descendant is None
 
 
+def test_get_descendant_to_lift_status_filter_includes_approval(app, mocker):
+    """Image pyramid lifting must consider QA, Approval, and Published descendants."""
+    captured = {}
+
+    def side_effect(path, **kwargs):
+        captured["body"] = kwargs.get("json")
+        return mock_es_post(path, **kwargs)
+
+    mocker.patch("requests.post", side_effect=side_effect)
+    with app.app_context():
+        api_client = ApiClient()
+        api_client.get_descendant_to_lift("uuid123")
+
+    status_terms = next(
+        clause["terms"]["mapped_status.keyword"]
+        for clause in captured["body"]["query"]["bool"]["must"]
+        if "terms" in clause and "mapped_status.keyword" in clause["terms"]
+    )
+    assert set(status_terms) == {"QA", "Approval", "Published"}
+
+
 def test_clean_headers(app):
     test_headers = {
         "Authorization": "Bearer token",

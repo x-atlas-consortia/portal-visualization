@@ -323,7 +323,7 @@ class ApiClient:
         """
         Given the data type of the descendant and a uuid,
         returns the doc of the most recent descendant
-        that is in QA or Published status.
+        that is in QA, Approval, or Published status.
         """
 
         hints = [{"term": {"vitessce-hints": "is_support"}}]
@@ -336,7 +336,7 @@ class ApiClient:
                     "must": [
                         *hints,
                         {"term": {"ancestor_ids": uuid}},
-                        {"terms": {"mapped_status.keyword": ["QA", "Published"]}},
+                        {"terms": {"mapped_status.keyword": ["QA", "Approval", "Published"]}},
                     ]
                 }
             },
