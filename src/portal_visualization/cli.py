@@ -27,7 +27,7 @@ def _cli_find_support_entity(uuid):  # pragma: no cover
                     {"term": {"vitessce-hints": "is_support"}},
                     {"term": {"vitessce-hints": "is_image"}},
                     {"term": {"ancestor_ids": uuid}},
-                    {"terms": {"mapped_status.keyword": ["QA", "Published"]}},
+                    {"terms": {"mapped_status.keyword": ["QA", "Approval", "Published"]}},
                 ]
             }
         },
