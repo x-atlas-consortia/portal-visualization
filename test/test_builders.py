@@ -583,6 +583,26 @@ def generate_multiome_test_cases():
         )
     )
 
+    # Test case 4: Multiome with .zarr.zip outputs (mudata-to-ui v0.0.13+)
+    test_cases.append(
+        (
+            "MultiomicAnndataZarrViewConfBuilder/generated-multiome-zip",
+            make_entity(
+                uuid=f"{base_uuid}-zip",
+                status="Published",
+                hints=["rna", "atac", "is_sc"],
+                soft_assaytype="multiome",
+                data_types=["multiome"],
+                files=[
+                    {"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"},
+                    {"rel_path": "hubmap_ui/mudata-zarr/wnn.multivec.zarr.zip"},
+                    {"rel_path": "hubmap_ui/mudata-zarr/rna.multivec.zarr.zip"},
+                    {"rel_path": "hubmap_ui/mudata-zarr/cbb.multivec.zarr.zip"},
+                ],
+            ),
+        )
+    )
+
     return test_cases
 
 
@@ -1435,6 +1455,58 @@ for test_id, entity in programmatic_test_cases:
         has_visualization_test_cases.append((False, entity))
     elif entity.get("uuid") not in excluded_uuids:
         has_visualization_test_cases.append((True, entity))
+
+
+@pytest.mark.requires_full
+def test_multiomic_builder_uses_zip_urls(mocker):
+    """Assert that when entity files indicate .zarr.zip outputs, the multiomic
+    builder produces .zarr.zip URLs for both mudata and multivec stores."""
+    from src.portal_visualization.builders.anndata_builders import (
+        MultiomicAnndataZarrViewConfBuilder,
+    )
+
+    from .fixtures import make_entity
+
+    entity = make_entity(
+        uuid="z" * 32,
+        status="Published",
+        hints=["rna", "atac", "is_sc"],
+        soft_assaytype="multiome",
+        data_types=["multiome"],
+        files=[
+            {"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"},
+            {"rel_path": "hubmap_ui/mudata-zarr/wnn.multivec.zarr.zip"},
+            {"rel_path": "hubmap_ui/mudata-zarr/rna.multivec.zarr.zip"},
+            {"rel_path": "hubmap_ui/mudata-zarr/cbb.multivec.zarr.zip"},
+        ],
+    )
+
+    class MockEntityPath:
+        name = "multiome-zip"
+
+    mock_zarr_store(MockEntityPath(), mocker, 5)
+
+    builder = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+    assert builder._is_zarr_zip is True, "zip detection should fire for .zarr.zip files"
+
+    conf, _ = builder.get_conf_cells()
+    confs = conf if isinstance(conf, list) else [conf]
+    urls = [
+        f.get("url", "")
+        for c in confs
+        for ds in c.get("datasets", [])
+        for f in ds.get("files", [])
+    ]
+
+    assert any(u.endswith("secondary_analysis.zarr.zip") for u in urls), (
+        f"expected secondary_analysis.zarr.zip in dataset URLs, got: {urls}"
+    )
+    assert any(".multivec.zarr.zip" in u for u in urls), (
+        f"expected a *.multivec.zarr.zip in dataset URLs, got: {urls}"
+    )
+    # Sanity: no unzipped paths should leak through
+    assert not any(u.endswith("/secondary_analysis.zarr") for u in urls)
+    assert not any(u.endswith(".multivec.zarr") for u in urls)
 
 
 @pytest.mark.requires_full

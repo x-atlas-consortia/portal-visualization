@@ -703,6 +703,9 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
     def __init__(self, entity, groups_token, assets_endpoint, **kwargs):
         super().__init__(entity, groups_token, assets_endpoint, **kwargs)
         self._scatterplot_w = 3
+        # mudata-to-ui (v0.0.13+) zips both secondary_analysis.zarr and *.multivec.zarr
+        # outputs. Older datasets still have unzipped .zarr/ directories — detect which.
+        self._detect_zarr_format()
 
     @cached_property
     def _zarr_accessor(self):
@@ -788,13 +791,6 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         modality_prefix = "mod/rna/obs"
         z = self.zarr_store
         obs = None if z is None else z[modality_prefix]
-        # file_paths_found = [file["rel_path"] for file in self._entity["files"] if "files" in self._entity]
-        # # Use .zgroup file as proxy for whether or not the zarr store is present.
-        # if any('.zarr.zip' in path for path in file_paths_found): # pragma: no cover
-        #     self._is_zarr_zip = True
-        # elif not self._is_zarr_zip and f'{MULTIOMIC_ZARR_PATH}/.zgroup' not in file_paths_found:  # pragma: no cover
-        #     message = f'Multiomic assay with uuid {self._uuid} has no .zarr store at {MULTIOMIC_ZARR_PATH}'
-        #     raise FileNotFoundError(message)
 
         # Each clustering has its own genomic profile; since we can't currently toggle between
         # selected genomic profiles, each clustering needs its own view config.
@@ -840,11 +836,33 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
 
     def _set_up_dataset(self, vc, multivec_label):
         zarr_base = "hubmap_ui/mudata-zarr"
-        zarr_path = f"{zarr_base}/secondary_analysis.zarr"
-        h5mu_zarr = self._build_assets_url(zarr_path, use_token=False)
-        rna_zarr = self._build_assets_url(f"{zarr_path}/mod/rna", use_token=False)
-        atac_cbg_zarr = self._build_assets_url(f"{zarr_path}/mod/atac_cbg", use_token=False)
-        multivec_zarr = self._build_assets_url(f"{zarr_base}/{multivec_label}.multivec.zarr", use_token=False)
+        zarr_suffix = ".zarr.zip" if self._is_zarr_zip else ".zarr"
+
+        if self._is_zarr_zip:
+            # All AnnDataWrappers share the same .zarr.zip URL; modality-specific paths
+            # are addressed via "mod/{name}/..." prefixes inside the zip.
+            h5mu_zarr = self._build_assets_url(f"{zarr_base}/secondary_analysis{zarr_suffix}", use_token=False)
+            rna_zarr = atac_cbg_zarr = h5mu_zarr
+            rna_prefix = "mod/rna/"
+            atac_cbg_prefix = "mod/atac_cbg/"
+        else:
+            h5mu_zarr = self._build_assets_url(f"{zarr_base}/secondary_analysis.zarr", use_token=False)
+            rna_zarr = self._build_assets_url(f"{zarr_base}/secondary_analysis.zarr/mod/rna", use_token=False)
+            atac_cbg_zarr = self._build_assets_url(f"{zarr_base}/secondary_analysis.zarr/mod/atac_cbg", use_token=False)
+            rna_prefix = ""
+            atac_cbg_prefix = ""
+
+        multivec_zarr = self._build_assets_url(
+            f"{zarr_base}/{multivec_label}.multivec{zarr_suffix}", use_token=False
+        )
+
+        def with_prefix(prefix, paths):
+            # obs_set_paths can contain bare strings or nested lists (e.g., azimuth categories).
+            return [
+                prefix + p if isinstance(p, str) else [prefix + sub for sub in p]
+                for p in paths
+            ]
+
         dataset = (
             vc.add_dataset(name=multivec_label)
             .add_object(
@@ -858,14 +876,14 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
                     # We run add_object with adata_path=rna_zarr first to add the cell-by-gene
                     # matrix and associated metadata.
                     adata_url=rna_zarr,
-                    # is_zip=self._is_zarr_zip,
-                    obs_embedding_paths=["obsm/X_umap"],
+                    is_zip=self._is_zarr_zip,
+                    obs_embedding_paths=[f"{rna_prefix}obsm/X_umap"],
                     obs_embedding_names=["UMAP - RNA"],
-                    obs_set_paths=self._obs_set_paths,
+                    obs_set_paths=with_prefix(rna_prefix, self._obs_set_paths),
                     obs_set_names=self._obs_set_names,
-                    obs_feature_matrix_path="X",
-                    initial_feature_filter_path="var/highly_variable",
-                    feature_labels_path="var/hugo_symbol",
+                    obs_feature_matrix_path=f"{rna_prefix}X",
+                    initial_feature_filter_path=f"{rna_prefix}var/highly_variable",
+                    feature_labels_path=f"{rna_prefix}var/hugo_symbol",
                     request_init=self._get_request_init(),
                     # To be explicit that the features represent genes and gene expression, we
                     # specify that here.
@@ -879,9 +897,10 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             .add_object(
                 AnnDataWrapper(
                     adata_url=atac_cbg_zarr,
-                    obs_feature_matrix_path="X",
-                    initial_feature_filter_path="var/highly_variable",
-                    obs_embedding_paths=["obsm/X_umap"],
+                    is_zip=self._is_zarr_zip,
+                    obs_feature_matrix_path=f"{atac_cbg_prefix}X",
+                    initial_feature_filter_path=f"{atac_cbg_prefix}var/highly_variable",
+                    obs_embedding_paths=[f"{atac_cbg_prefix}obsm/X_umap"],
                     obs_embedding_names=["UMAP - ATAC"],
                     request_init=self._get_request_init(),
                     # To be explicit that the features represent genes and gene expression, we
@@ -895,7 +914,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             .add_object(
                 AnnDataWrapper(
                     adata_url=h5mu_zarr,
-                    # is_zip=self._is_zarr_zip,
+                    is_zip=self._is_zarr_zip,
                     obs_feature_matrix_path="X",
                     obs_embedding_paths=["obsm/X_umap"],
                     obs_embedding_names=["UMAP - WNN"],
