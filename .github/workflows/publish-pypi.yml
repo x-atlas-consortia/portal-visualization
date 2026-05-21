@@ -20,6 +20,8 @@ jobs:
   verify-and-publish:
     name: Verify and Publish to ${{ inputs.environment }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.set-url.outputs.package_url }}
