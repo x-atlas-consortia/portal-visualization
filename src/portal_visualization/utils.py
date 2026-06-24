@@ -4,10 +4,11 @@ from itertools import groupby
 from pathlib import Path
 from unicodedata import normalize
 
-import fsspec
 import nbformat
 import requests
 import zarr
+from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
+from fsspec.implementations.zip import ZipFileSystem
 from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
@@ -271,23 +272,38 @@ def files_from_response(response_json):
     return {hit["_id"]: [file["rel_path"] for file in hit["_source"].get("files", [])] for hit in hits}
 
 
+class _SafeZipFileSystem(ZipFileSystem):
+    """ZipFileSystem that raises FileNotFoundError (not KeyError) for absent members.
+
+    zarr v3 stores require ``get`` to return ``None`` for a missing key; it only
+    translates ``FileNotFoundError`` to ``None``. ZipFileSystem raises ``KeyError``,
+    which otherwise breaks zarr's probes for optional metadata (e.g. ``.zmetadata``).
+    """
+
+    def _open(self, path, mode="rb", *args, **kwargs):
+        try:
+            return super()._open(path, mode, *args, **kwargs)
+        except KeyError as e:
+            raise FileNotFoundError(path) from e
+
+
 def read_zip_zarr(zarr_url, request_init):
     """
-    Opens a zarr file provided in zip format using fsspec.
+    Opens a (possibly remote) zip-format zarr store via fsspec, range-reading rather
+    than downloading the whole archive.
 
     Parameters:
-        zarr_url (str): URL to the zipped.zarr file.
+        zarr_url (str): URL to the zipped .zarr file.
         request_init (dict): Client kwargs for request customization.
 
     Returns:
-        zarr.hierarchy.Group or zarr.array: Opened Zarr store.
+        zarr.Group: Opened Zarr store.
     """
-    fs = fsspec.filesystem(
-        "zip",
+    fs = _SafeZipFileSystem(
         fo=zarr_url,
         remote_protocol="https",
         remote_options={"client_kwargs": request_init},
-        # expand=True
     )
-    store = fs.get_mapper("")
-    return zarr.open(store, mode="r")
+    # zarr v3 needs an async-capable store; wrap the sync zip filesystem.
+    store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs), read_only=True)
+    return zarr.open_group(store, mode="r", use_consolidated=False)

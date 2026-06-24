@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from src.portal_visualization.builder_factory import (
@@ -283,18 +284,17 @@ def mock_zarr_store(entity_path, mocker, obs_count):
         existing_keys = set(obs.keys())
         groups_to_create = [name for name in cluster_names if name not in existing_keys]
 
-        if groups_to_create:
-            groups = obs.create_groups(*groups_to_create)
-            for group in groups:
-                group["categories"] = zarr.array(["0", "1", "2"])
+        for name in groups_to_create:
+            group = obs.create_group(name)
+            group["categories"] = np.asarray(["0", "1", "2"])
 
         # Convert leiden arrays to groups with categories if they exist
         for name in ["leiden_wnn", "leiden_rna"]:
-            if name in existing_keys and isinstance(obs[name], zarr.core.Array):
+            if name in existing_keys and isinstance(obs[name], zarr.Array):
                 # Delete the array and create a group instead
                 del obs[name]
                 group = obs.create_group(name)
-                group["categories"] = zarr.array(["0", "1", "2"])
+                group["categories"] = np.asarray(["0", "1", "2"])
     else:
         # Create regular AnnData structure
         if is_annotated and not is_marker:
@@ -303,46 +303,50 @@ def mock_zarr_store(entity_path, mocker, obs_count):
         else:
             # Create manual structure for non-annotated or marker entities
             obs = z.create_group("obs")
-            obs["_index"] = zarr.array(obs_index)
+            obs["_index"] = np.asarray(obs_index)
 
             # Add marker genes if needed
             if is_marker:
-                gene_array = zarr.array(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
-                obs["marker_gene_0"] = zarr.array(obs_index)
+                gene_array = np.asarray(["ENSG00000139618", "ENSG00000139619", "ENSG00000139620"])
+                obs["marker_gene_0"] = np.asarray(obs_index)
                 obs.attrs["encoding-version"] = "0.1.0"
 
                 var = z.create_group("var")
                 var.attrs["_index"] = "index"
                 var["index"] = gene_array
-                var["hugo_symbol"] = zarr.array([0, 1, 2])
+                var["hugo_symbol"] = np.asarray([0, 1, 2])
                 var["hugo_symbol"].attrs["categories"] = "hugo_categories"
-                var["hugo_categories"] = zarr.array(["gene123", "gene456", "gene789"])
+                var["hugo_categories"] = np.asarray(["gene123", "gene456", "gene789"])
 
     # Add annotation-specific metadata
     if is_annotated:
         obs_prefix_path = "mod/rna/obs" if is_multiome else "obs"
         obs_group = z[obs_prefix_path]
         path = f"{'mod/rna/' if is_multiome else ''}uns/annotation_metadata/is_annotated"
-        z[path] = True
+        is_annotated_arr = z.create_array(path, shape=(), dtype=bool, overwrite=True)
+        is_annotated_arr[()] = True
 
         if is_asct:
             # Create categorical array for ASCT
-            obs_group["predicted.ASCT.celltype"] = zarr.array([f"asct_{i % 3}" for i in range(obs_count)])
+            obs_group["predicted.ASCT.celltype"] = np.asarray([f"asct_{i % 3}" for i in range(obs_count)])
         elif is_azimuth_labeled:
-            obs_group["predicted_label"] = zarr.array([f"celltype_{i % 3}" for i in range(obs_count)])
-            obs_group["predicted_CLID"] = zarr.array([f"CL:{1000000 + i % 3}" for i in range(obs_count)])
+            obs_group["predicted_label"] = np.asarray([f"celltype_{i % 3}" for i in range(obs_count)])
+            obs_group["predicted_CLID"] = np.asarray([f"CL:{1000000 + i % 3}" for i in range(obs_count)])
         elif is_pan_azimuth and not is_multiome:
             # For non-multiome pan-azimuth, we need to create azimuth columns
             azimuth_cols = ["azimuth_broad", "azimuth_medium", "azimuth_fine"]
             for col in azimuth_cols:
                 # Create as group with categories (multiome already has these)
                 group = obs_group.create_group(col)
-                group["categories"] = zarr.array(["type_a", "type_b", "type_c"])
+                group["categories"] = np.asarray(["type_a", "type_b", "type_c"])
             # For multiome pan-azimuth, azimuth columns were already created in the multiome logic above
 
     # Add Visium-specific metadata
     if is_visium:
-        z["uns/spatial/visium/scalefactors/spot_diameter_micrometers"] = 200.0
+        spot_diameter = z.create_array(
+            "uns/spatial/visium/scalefactors/spot_diameter_micrometers", shape=(), dtype="float64"
+        )
+        spot_diameter[()] = 200.0
 
     # Mock HTTP requests for object-by-analyte entities
     if is_object_by_analyte_entity(entity_path):
@@ -579,6 +583,21 @@ def generate_multiome_test_cases():
                 soft_assaytype="multiome",
                 data_types=["multiome"],
                 files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr/.zgroup"}],
+            ),
+        )
+    )
+
+    # Test case 4: Zipped store (single .zarr.zip holding the whole MuData)
+    test_cases.append(
+        (
+            "MultiomicAnndataZarrViewConfBuilder/generated-multiome-zip",
+            make_entity(
+                uuid=f"{base_uuid}-zip",
+                status="Published",
+                hints=["rna", "atac", "is_sc"],
+                soft_assaytype="multiome",
+                data_types=["multiome"],
+                files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"}],
             ),
         )
     )
@@ -1439,15 +1458,13 @@ for test_id, entity in programmatic_test_cases:
 
 @pytest.mark.requires_full
 def test_read_zip_zarr_opens_store(mocker):
-    # Mock the fsspec filesystem and zarr open
-    mock_fs = mocker.Mock()
-    mock_mapper = mocker.Mock()
+    # Mock the zarr v3 store wiring so no network access occurs.
     mock_zarr_obj = mocker.Mock()
-
-    mock_fs.get_mapper.return_value = mock_mapper
-
-    mocker.patch("src.portal_visualization.utils.fsspec.filesystem", return_value=mock_fs)
-    mocker.patch("src.portal_visualization.utils.zarr.open", return_value=mock_zarr_obj)
+    mock_store = mocker.Mock()
+    mocker.patch("src.portal_visualization.utils._SafeZipFileSystem", return_value=mocker.Mock())
+    mocker.patch("src.portal_visualization.utils.AsyncFileSystemWrapper", return_value=mocker.Mock())
+    mocker.patch("src.portal_visualization.utils.zarr.storage.FsspecStore", return_value=mock_store)
+    open_group = mocker.patch("src.portal_visualization.utils.zarr.open_group", return_value=mock_zarr_obj)
 
     dummy_url = "https://example.com/fake.zarr.zip"
     request_init = {"headers": {"Authorization": "Bearer token"}}
@@ -1455,7 +1472,22 @@ def test_read_zip_zarr_opens_store(mocker):
     result = read_zip_zarr(dummy_url, request_init)
 
     assert result == mock_zarr_obj
-    mock_fs.get_mapper.assert_called_once_with("")
+    open_group.assert_called_once_with(mock_store, mode="r", use_consolidated=False)
+
+
+@pytest.mark.requires_full
+def test_safe_zip_filesystem_translates_missing_key(tmp_path):
+    """Absent zip members must surface as FileNotFoundError so zarr v3 treats them as None."""
+    import zipfile
+
+    from src.portal_visualization.utils import _SafeZipFileSystem
+
+    zp = tmp_path / "x.zarr.zip"
+    with zipfile.ZipFile(zp, "w") as zf:
+        zf.writestr(".zgroup", '{"zarr_format": 2}')
+    fs = _SafeZipFileSystem(fo=str(zp))
+    with pytest.raises(FileNotFoundError):
+        fs._open("does/not/exist")
 
 
 @pytest.mark.parametrize(
@@ -1802,17 +1834,17 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
     # Xenium is multiome, so create mod/rna/obs structure
     obs = z.create_group("mod/rna/obs")
     z.create_group("mod/rna/var")  # Required for multiome structure
-    obs["_index"] = zarr.array(obs_index)
+    obs["_index"] = np.asarray(obs_index)
 
     # Add required multiome groups
     group_names = ["leiden_wnn", "leiden_rna"]
-    groups = obs.create_groups(*group_names)
-    for group in groups:
-        group["categories"] = zarr.array(["0", "1", "2"])
+    for name in group_names:
+        group = obs.create_group(name)
+        group["categories"] = np.asarray(["0", "1", "2"])
 
     # Also create regular obs group
     obs_regular = z.create_group("obs")
-    obs_regular["_index"] = zarr.array(obs_index)
+    obs_regular["_index"] = np.asarray(obs_index)
 
     # Mock zarr.open to return our mocked zarr store
     mocker.patch("zarr.open", return_value=z)
@@ -1830,6 +1862,111 @@ def test_xenium_large_dataset_hides_heatmap(mocker):
 
     # Verify spatial view is still present
     assert "spatial" in layout_str.lower(), "Spatial view should still be present"
+
+
+@pytest_requires_full
+def test_multiome_detects_zarr_zip(mocker):
+    """Regression: multiome builder must detect .zarr.zip files and open the zip store.
+
+    When only a zipped store is present, _is_zarr_zip must be set so zarr_store opens
+    the .zip path. Previously it stayed False and zarr.open hit the non-existent
+    unzipped path -> PathNotFoundError.
+    """
+    from src.portal_visualization.builders.anndata_builders import MultiomicAnndataZarrViewConfBuilder
+
+    from .fixtures import make_entity
+
+    z = create_mock_zarr_group()
+    populate_multiome_zarr(z, obs_count=5, modalities=["rna"])
+    open_mock = mocker.patch("zarr.open", return_value=z)
+    zip_mock = mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=z)
+
+    entity = make_entity(
+        uuid="multiome-zip-uuid",
+        hints=["rna", "atac", "is_sc"],
+        soft_assaytype="multiome",
+        files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"}],
+    )
+    builder = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+
+    assert builder.zarr_store is z
+    assert builder._is_zarr_zip is True
+    zip_mock.assert_called_once()
+    open_mock.assert_not_called()
+
+
+@pytest_requires_full
+def test_multiome_zip_dataset_uses_zip_urls_and_modality_prefixes():
+    """For a zipped store, every file URL must point at the .zip and the per-modality AnnData
+    paths must be prefixed (mod/rna/, mod/atac_cbg/), since the unzipped subpaths don't exist."""
+    from src.portal_visualization.builders.anndata_builders import MultiomicAnndataZarrViewConfBuilder
+
+    from .fixtures import make_entity
+
+    entity = make_entity(
+        uuid="multiome-zip-paths",
+        hints=["rna", "atac", "is_sc"],
+        soft_assaytype="multiome",
+        files=[{"rel_path": "hubmap_ui/mudata-zarr/secondary_analysis.zarr.zip"}],
+    )
+    builder = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+    builder._is_zarr_zip = True
+    builder._obs_set_paths = ["obs/leiden_wnn", ["obs/azimuth_broad", "obs/azimuth_fine"]]
+    builder._obs_set_names = ["Leiden WNN", "Azimuth"]
+
+    vc, _ = builder._create_vitessce_config()
+    builder._set_up_dataset(vc, "wnn")
+    files = [f for ds in vc.to_dict()["datasets"] for f in ds["files"]]
+
+    assert any(f["fileType"] == "genomic-profiles.zarr.zip" for f in files)
+    for f in files:
+        assert ".zip" in f["url"], f"{f['fileType']} url is not zipped: {f['url']}"
+    blob = json.dumps(files)
+    assert "wnn.multivec.zarr.zip" in blob
+    assert "secondary_analysis.zarr.zip" in blob
+    # modality prefixes applied to the per-modality AnnData paths (incl. nested obs sets)
+    assert "mod/rna/X" in blob
+    assert "mod/rna/obs/leiden_wnn" in blob
+    assert "mod/rna/obs/azimuth_broad" in blob
+    assert "mod/atac_cbg/X" in blob
+
+
+@pytest_requires_full
+def test_multiome_get_obs_set_members_encodings():
+    """_get_obs_set_members must read category labels from both anndata categorical encodings:
+    the newer group (categories member array) and the older array (attrs["categories"]).
+    """
+    from src.portal_visualization.builders.anndata_builders import MultiomicAnndataZarrViewConfBuilder
+
+    from .fixtures import make_entity
+
+    z = zarr.open_group()
+    obs = z.create_group("mod/rna/obs")
+
+    # Newer encoding: group with a `categories` member array.
+    grp = obs.create_group("leiden_wnn")
+    grp["categories"] = np.asarray(["X", "Y"])
+
+    # Older encoding, inline labels: array of codes with attrs["categories"] = list.
+    obs["leiden_rna"] = np.asarray([0, 1, 0])
+    obs["leiden_rna"].attrs["categories"] = ["A", "B"]
+
+    # Older encoding, referenced labels: attrs["categories"] names a sibling array.
+    obs["__categories/cluster_atac"] = np.asarray(["P", "Q", "R"])
+    obs["cluster_atac"] = np.asarray([0, 1, 2])
+    obs["cluster_atac"].attrs["categories"] = "__categories/cluster_atac"
+
+    # Plain (non-categorical) string column: members are the distinct values.
+    obs["predicted_label"] = np.asarray(["T cell", "B cell", "T cell"])
+
+    entity = make_entity(uuid="multiome-cats", hints=["rna", "atac", "is_sc"], soft_assaytype="multiome")
+    builder = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+    builder.__dict__["zarr_store"] = z
+
+    assert list(builder._get_obs_set_members("leiden_wnn")) == ["X", "Y"]
+    assert list(builder._get_obs_set_members("leiden_rna")) == ["A", "B"]
+    assert list(builder._get_obs_set_members("cluster_atac")) == ["P", "Q", "R"]
+    assert list(builder._get_obs_set_members("predicted_label")) == ["B cell", "T cell"]
 
 
 @pytest_requires_full

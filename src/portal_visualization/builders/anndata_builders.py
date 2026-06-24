@@ -28,6 +28,18 @@ RNA_SEQ_ANNDATA_FACTOR_PATHS = [
 RNA_SEQ_FACTOR_LABEL_NAMES = [f"Marker Gene {i}" for i in range(len(RNA_SEQ_ANNDATA_FACTOR_PATHS))]
 
 
+def _prefix_paths(paths, prefix):
+    """Prepend a modality path (e.g. ``"mod/rna/"``) to zarr paths.
+
+    Used when a whole MuData lives in one zip store and modalities must be addressed by
+    their internal path. Handles nested lists (hierarchical obs sets) and None; a falsy
+    prefix returns the paths unchanged (the unzipped case, where the URL is the subpath).
+    """
+    if not prefix or paths is None:
+        return paths
+    return [_prefix_paths(p, prefix) if isinstance(p, list) else f"{prefix}{p}" for p in paths]
+
+
 class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
     """Wrapper class for creating a AnnData-backed view configuration
     for "second generation" post-August 2020 RNA-seq data from anndata-to-ui.cwl like
@@ -69,13 +81,14 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
     def n_obs(self):
         """Get the number of observations in the dataset.
 
+        >>> import numpy as np
         >>> import zarr
         >>> entity = {'uuid': 'test', 'status': 'Published', 'vitessce-hints': ['rna', 'is_annotated'], 'soft_assaytype': 'salmon_sn_rnaseq_10x', 'data_types': ['salmon_sn_rnaseq_10x'], 'files': [{'rel_path': 'hubmap_ui/anndata-zarr/secondary_analysis.zarr/.zgroup'}]}
         >>> builder = RNASeqAnnDataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> # Mock zarr store with obs index
         >>> z = zarr.open_group()
         >>> obs_group = z.create_group('obs')
-        >>> obs_group['_index'] = zarr.array(['cell_0', 'cell_1', 'cell_2'])
+        >>> obs_group['_index'] = np.array(['cell_0', 'cell_1', 'cell_2'])
         >>> # Set the cached property value directly on the instance
         >>> builder.__dict__['zarr_store'] = z
         >>> builder.n_obs
@@ -712,6 +725,9 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
     @cached_property
     def zarr_store(self):
         """Open the Zarr store using ZarrStoreAccessor."""
+        # Detect zip format here since every cached property routes through zarr_store.
+        if f"{MULTIOMIC_ZARR_PATH}.zip" in self._get_file_paths():
+            self._is_zarr_zip = True
         zarr_path = f"{MULTIOMIC_ZARR_PATH}.zip" if self._is_zarr_zip else MULTIOMIC_ZARR_PATH
         return self._zarr_accessor.open_store(is_zip=self._is_zarr_zip, zarr_path=zarr_path)
 
@@ -738,6 +754,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         """Get the number of observations in the multiomics dataset.
 
         >>> import json
+        >>> import numpy as np
         >>> import zarr
         >>> # Create a simple programmatic entity
         >>> entity = {
@@ -753,7 +770,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         >>> z = zarr.open_group()
         >>> rna_mod = z.create_group('mod/rna')
         >>> obs_group = rna_mod.create_group('obs')
-        >>> obs_group['_index'] = zarr.array(['cell_0', 'cell_1', 'cell_2'])
+        >>> obs_group['_index'] = np.array(['cell_0', 'cell_1', 'cell_2'])
         >>> builder.__dict__['zarr_store'] = z
         >>> builder.n_obs
         3
@@ -761,7 +778,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         >>> z2 = zarr.open_group()
         >>> rna_mod2 = z2.create_group('mod/rna')
         >>> obs_group2 = rna_mod2.create_group('obs')
-        >>> obs_group2['leiden'] = zarr.array(['cluster_0', 'cluster_1', 'cluster_2', 'cluster_3'])
+        >>> obs_group2['leiden'] = np.array(['cluster_0', 'cluster_1', 'cluster_2', 'cluster_3'])
         >>> builder2 = MultiomicAnndataZarrViewConfBuilder(entity, 'token', 'https://example.com')
         >>> builder2.__dict__['zarr_store'] = z2
         >>> builder2.n_obs
@@ -840,16 +857,27 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
 
     def _set_up_dataset(self, vc, multivec_label):
         zarr_base = "hubmap_ui/mudata-zarr"
-        zarr_path = f"{zarr_base}/secondary_analysis.zarr"
-        h5mu_zarr = self._build_assets_url(zarr_path, use_token=False)
-        rna_zarr = self._build_assets_url(f"{zarr_path}/mod/rna", use_token=False)
-        atac_cbg_zarr = self._build_assets_url(f"{zarr_path}/mod/atac_cbg", use_token=False)
-        multivec_zarr = self._build_assets_url(f"{zarr_base}/{multivec_label}.multivec.zarr", use_token=False)
+        if self._is_zarr_zip:
+            # The whole MuData lives in one zip store, so every modality is addressed by its
+            # internal path off a single URL (the unzipped subpaths don't exist on the server).
+            store_url = self._build_assets_url(f"{zarr_base}/secondary_analysis.zarr.zip", use_token=False)
+            rna_zarr = atac_cbg_zarr = h5mu_zarr = store_url
+            rna_prefix, atac_prefix = "mod/rna/", "mod/atac_cbg/"
+        else:
+            zarr_path = f"{zarr_base}/secondary_analysis.zarr"
+            h5mu_zarr = self._build_assets_url(zarr_path, use_token=False)
+            rna_zarr = self._build_assets_url(f"{zarr_path}/mod/rna", use_token=False)
+            atac_cbg_zarr = self._build_assets_url(f"{zarr_path}/mod/atac_cbg", use_token=False)
+            rna_prefix = atac_prefix = ""
+
+        multivec_suffix = ".multivec.zarr.zip" if self._is_zarr_zip else ".multivec.zarr"
+        multivec_zarr = self._build_assets_url(f"{zarr_base}/{multivec_label}{multivec_suffix}", use_token=False)
         dataset = (
             vc.add_dataset(name=multivec_label)
             .add_object(
                 MultivecZarrWrapper(
                     zarr_url=multivec_zarr,
+                    is_zip=self._is_zarr_zip,
                     request_init=self._get_request_init(),
                 )
             )
@@ -858,14 +886,14 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
                     # We run add_object with adata_path=rna_zarr first to add the cell-by-gene
                     # matrix and associated metadata.
                     adata_url=rna_zarr,
-                    # is_zip=self._is_zarr_zip,
-                    obs_embedding_paths=["obsm/X_umap"],
+                    is_zip=self._is_zarr_zip,
+                    obs_embedding_paths=_prefix_paths(["obsm/X_umap"], rna_prefix),
                     obs_embedding_names=["UMAP - RNA"],
-                    obs_set_paths=self._obs_set_paths,
+                    obs_set_paths=_prefix_paths(self._obs_set_paths, rna_prefix),
                     obs_set_names=self._obs_set_names,
-                    obs_feature_matrix_path="X",
-                    initial_feature_filter_path="var/highly_variable",
-                    feature_labels_path="var/hugo_symbol",
+                    obs_feature_matrix_path=f"{rna_prefix}X",
+                    initial_feature_filter_path=f"{rna_prefix}var/highly_variable",
+                    feature_labels_path=f"{rna_prefix}var/hugo_symbol",
                     request_init=self._get_request_init(),
                     # To be explicit that the features represent genes and gene expression, we
                     # specify that here.
@@ -879,9 +907,10 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             .add_object(
                 AnnDataWrapper(
                     adata_url=atac_cbg_zarr,
-                    obs_feature_matrix_path="X",
-                    initial_feature_filter_path="var/highly_variable",
-                    obs_embedding_paths=["obsm/X_umap"],
+                    is_zip=self._is_zarr_zip,
+                    obs_feature_matrix_path=f"{atac_prefix}X",
+                    initial_feature_filter_path=f"{atac_prefix}var/highly_variable",
+                    obs_embedding_paths=_prefix_paths(["obsm/X_umap"], atac_prefix),
                     obs_embedding_names=["UMAP - ATAC"],
                     request_init=self._get_request_init(),
                     # To be explicit that the features represent genes and gene expression, we
@@ -894,8 +923,9 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             )
             .add_object(
                 AnnDataWrapper(
+                    # WNN embedding lives at the MuData root, so no modality prefix is needed.
                     adata_url=h5mu_zarr,
-                    # is_zip=self._is_zarr_zip,
+                    is_zip=self._is_zarr_zip,
                     obs_feature_matrix_path="X",
                     obs_embedding_paths=["obsm/X_umap"],
                     obs_embedding_names=["UMAP - WNN"],
@@ -990,5 +1020,18 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
 
     def _get_obs_set_members(self, column_name):
         z = self.zarr_store
-        members = z[f"mod/rna/obs/{column_name}"].categories
-        return members
+        obs = z["mod/rna/obs"]
+        node = obs[column_name]
+        # mudata-to-ui copies cluster columns across modalities; depending on the source
+        # dtype, anndata writes obs columns in one of three ways:
+        # 1. Categorical as a group -> labels live in the `categories` member array.
+        if not hasattr(node, "shape"):  # zarr Group has no shape; an Array does
+            return node["categories"][:]
+        # 2. Categorical as a codes array -> attrs["categories"] holds the labels, or names
+        #    a sibling labels array (same pattern handled in _set_up_marker_gene).
+        if "categories" in node.attrs:
+            cats = node.attrs["categories"]
+            return obs[cats][:] if isinstance(cats, str) else cats
+        # 3. Plain (non-categorical) string/int column -> the members are its distinct values,
+        #    matching how adata_to_multivec_zarr names the per-cluster genomic profiles.
+        return np.unique(node[:])
