@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 
-import numpy as np
 import pytest
+import yaml  # dev dependency, always available; used at module load below
 
 from src.portal_visualization.builder_factory import (
     get_view_config_builder,
@@ -24,7 +24,7 @@ from .fixtures import (
 pytest_requires_full = pytest.mark.requires_full
 
 try:
-    import yaml
+    import numpy as np
     import zarr
 
     from src.portal_visualization.builders.imaging_builders import (
