@@ -359,6 +359,7 @@ def mock_zarr_store(entity_path, mocker, obs_count):
     # Mock image metadata retrieval (used by imaging builders, harmless for others)
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
     mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
+    mocker.patch("src.portal_visualization.builders.sprm_builders.get_ome_tiff_metadata", return_value=None)
     # Mock read_metadata_from_url (SegmentationMaskBuilder fetches zarr metadata over HTTP)
     mocker.patch(
         "src.portal_visualization.builders.epic_builders.SegmentationMaskBuilder.read_metadata_from_url",
@@ -1815,6 +1816,62 @@ def test_small_dataset_includes_heatmap(builder_entity, mocker):
     layout_str = json.dumps(conf["layout"])
     assert "heatmap" in layout_str.lower(), "Heatmap should be present for small datasets"
     assert "heatmap" in layout_str.lower(), "Heatmap should be present for small datasets"
+
+
+@pytest_requires_full
+def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
+    """SPRM AnnData builder: heatmap hides at >100k cells (views expand) and the
+    'Cell K-Means [UMAP_All_Features]' cell set is selected when present."""
+    from src.portal_visualization.builders.sprm_builders import (
+        PRIORITIZED_SPRM_CELL_SET,
+        SPRMAnnDataViewConfBuilder,
+    )
+
+    from .fixtures import make_entity
+
+    builder = SPRMAnnDataViewConfBuilder(
+        make_entity(uuid="sprm-uuid"),
+        "token",
+        "https://example.com",
+        base_name="r1",
+        mask_name="r1_mask",
+        image_name="r1_expr",
+        imaging_path="expr",
+        mask_path="mask",
+    )
+
+    # _get_n_obs: None -> 0, obsm/xy fallback, obs/_index preferred.
+    assert builder._get_n_obs(None) == 0
+    z = zarr.open_group()
+    z.create_group("obsm")["xy"] = np.zeros((7, 2))
+    assert builder._get_n_obs(z) == 7
+    z.create_group("obs")["_index"] = np.asarray([str(i) for i in range(9)])
+    assert builder._get_n_obs(z) == 9
+
+    # Large dataset: heatmap hidden, beta views used, prioritized cell set selected, multi-channel image.
+    from src.portal_visualization.builders.sprm_builders import IMAGE_CHANNEL_COLORS
+
+    vc, dataset = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
+    builder._setup_view_config_raster_cellsets_expression_segmentation(
+        vc, dataset, marker=None, n_obs=150_000, obs_set_names=[PRIORITIZED_SPRM_CELL_SET], num_image_channels=6
+    )
+    conf = vc.to_dict()
+    layout_str = json.dumps(conf["layout"])
+    assert "heatmap" not in layout_str.lower()
+    assert "spatialBeta" in layout_str
+    assert "layerControllerBeta" in layout_str
+    assert PRIORITIZED_SPRM_CELL_SET in json.dumps(conf["coordinationSpace"])
+    # First 6 image channels, each with its distinct color.
+    channel_colors = list(conf["coordinationSpace"].get("spatialChannelColor", {}).values())
+    for color in IMAGE_CHANNEL_COLORS:
+        assert color in channel_colors
+
+    # Small dataset: heatmap present.
+    vc2, dataset2 = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
+    builder._setup_view_config_raster_cellsets_expression_segmentation(
+        vc2, dataset2, marker=None, n_obs=5, obs_set_names=[]
+    )
+    assert "heatmap" in json.dumps(vc2.to_dict()["layout"]).lower()
 
 
 @pytest.mark.requires_full

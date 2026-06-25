@@ -4,6 +4,7 @@ from itertools import groupby
 from pathlib import Path
 from unicodedata import normalize
 
+import fsspec
 import nbformat
 import requests
 import zarr
@@ -132,6 +133,127 @@ def get_image_metadata(self, img_url):
     else:
         logger.warning("Failed to retrieve %s: %s - %s", img_url, response.status_code, response.reason)
     return meta_data
+
+
+def get_ome_tiff_metadata(url):
+    """Read pixel metadata from a (possibly remote) OME-TIFF's OME-XML.
+
+    Reads only the TIFF header via range requests rather than downloading the image data. Returns a
+    dict with the channel count (``SizeC``) and physical pixel sizes in the shape ``get_image_scale``
+    expects (``PhysicalSizeX/Y`` plus ``PhysicalSizeUnitX/Y``), or None if it can't be read. The
+    units matter: image and mask may use different units (e.g. µm vs mm), so the raw values must not
+    be compared directly.
+
+    >>> import tifffile, numpy as np, tempfile, os
+    >>> path = os.path.join(tempfile.mkdtemp(), "t.ome.tif")
+    >>> tifffile.imwrite(path, np.zeros((3, 30, 40), dtype=np.uint8), photometric="minisblack",
+    ...                  metadata={"axes": "CYX", "PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "µm",
+    ...                            "PhysicalSizeY": 0.5, "PhysicalSizeYUnit": "µm"})
+    >>> meta = get_ome_tiff_metadata(path)
+    >>> (meta["SizeC"], meta["PhysicalSizeX"], meta["PhysicalSizeUnitX"])
+    (3, 0.5, 'µm')
+    >>> plain = os.path.join(tempfile.mkdtemp(), "plain.tif")
+    >>> tifffile.imwrite(plain, np.zeros((2, 2), dtype=np.uint8), ome=False)
+    >>> get_ome_tiff_metadata(plain) is None
+    True
+    """
+    try:
+        import xml.etree.ElementTree as ElementTree
+
+        import tifffile
+
+        with fsspec.open(url).open() as f, tifffile.TiffFile(f) as tif:
+            ome_xml = tif.ome_metadata
+        if not ome_xml:
+            return None
+        pixels = next((e for e in ElementTree.fromstring(ome_xml).iter() if e.tag.endswith("Pixels")), None)
+        if pixels is None:  # pragma: no cover
+            return None
+        physical_x, physical_y, size_c = pixels.get("PhysicalSizeX"), pixels.get("PhysicalSizeY"), pixels.get("SizeC")
+        return {
+            "SizeC": int(size_c) if size_c else 1,
+            "PhysicalSizeX": float(physical_x) if physical_x else None,
+            "PhysicalSizeY": float(physical_y) if physical_y else None,
+            "PhysicalSizeUnitX": pixels.get("PhysicalSizeXUnit"),
+            "PhysicalSizeUnitY": pixels.get("PhysicalSizeYUnit"),
+        }
+    except Exception as e:  # pragma: no cover
+        logger.warning("Could not read OME-TIFF metadata from %s: %s", url, e)
+        return None
+
+
+# Physical-size unit spellings -> micrometers per unit.
+_UNIT_TO_MICROMETERS = {
+    "nm": 1e-3,
+    "nanometer": 1e-3,
+    "nanometre": 1e-3,
+    "µm": 1.0,
+    "μm": 1.0,
+    "um": 1.0,
+    "micron": 1.0,
+    "micrometer": 1.0,
+    "micrometre": 1.0,
+    "mm": 1e3,
+    "millimeter": 1e3,
+    "millimetre": 1e3,
+    "cm": 1e4,
+    "dm": 1e5,
+    "m": 1e6,
+    "meter": 1e6,
+    "metre": 1e6,
+}
+
+
+def _physical_size_micrometers(size, unit):
+    """Physical pixel size in micrometers. Missing size -> 1.0 (Vitessce's per-pixel default);
+    unknown unit -> the raw value (best effort)."""
+    if not size:
+        return 1.0
+    if isinstance(unit, str):
+        factor = _UNIT_TO_MICROMETERS.get(normalize("NFKC", unit).strip().lower())
+        if factor:
+            return float(size) * factor
+    return float(size)
+
+
+def get_segmentation_alignment_scale(image_metadata, mask_metadata):
+    """5-element coordinate-transformation scale aligning a segmentation mask onto an image.
+
+    Vitessce places layers by physical size, so the scale is the ratio of the image's physical
+    pixel size to the mask's. Unit spellings are normalized and missing/unitless physical sizes are
+    treated as 1 µm/px, so (unlike get_image_scale) it does not bail to identity when one OME-TIFF
+    omits its unit. Returns identity only when metadata is entirely absent or degenerate.
+
+    >>> img = {"PhysicalSizeX": 0.5, "PhysicalSizeY": 0.5, "PhysicalSizeUnitX": "µm", "PhysicalSizeUnitY": "µm"}
+    >>> mask = {"PhysicalSizeX": 0.000984, "PhysicalSizeY": 0.000984, "PhysicalSizeUnitX": "mm", \
+                "PhysicalSizeUnitY": "mm"}
+    >>> get_segmentation_alignment_scale(img, mask)
+    [0.50813, 0.50813, 1, 1, 1]
+    >>> get_segmentation_alignment_scale(img, {"PhysicalSizeX": None})  # mask lacks physical size -> 1 µm/px
+    [0.5, 0.5, 1, 1, 1]
+    >>> get_segmentation_alignment_scale(None, mask)
+    [1, 1, 1, 1, 1]
+    >>> get_segmentation_alignment_scale({"PhysicalSizeX": 2.0, "PhysicalSizeY": 2.0},
+    ...                                  {"PhysicalSizeX": 1.0, "PhysicalSizeY": 1.0})  # no units -> raw values
+    [2.0, 2.0, 1, 1, 1]
+    >>> get_segmentation_alignment_scale({"PhysicalSizeX": 508.0, "PhysicalSizeY": 508.0},
+    ...                                  {"PhysicalSizeX": 1.0, "PhysicalSizeY": 1.0})  # implausible -> identity
+    [1, 1, 1, 1, 1]
+    """
+    if not image_metadata or not mask_metadata:
+        return [1, 1, 1, 1, 1]
+    mask_x = _physical_size_micrometers(mask_metadata.get("PhysicalSizeX"), mask_metadata.get("PhysicalSizeUnitX"))
+    mask_y = _physical_size_micrometers(mask_metadata.get("PhysicalSizeY"), mask_metadata.get("PhysicalSizeUnitY"))
+    if not (mask_x and mask_y):  # pragma: no cover
+        return [1, 1, 1, 1, 1]
+    image_x = _physical_size_micrometers(image_metadata.get("PhysicalSizeX"), image_metadata.get("PhysicalSizeUnitX"))
+    image_y = _physical_size_micrometers(image_metadata.get("PhysicalSizeY"), image_metadata.get("PhysicalSizeUnitY"))
+    scale_x, scale_y = round(image_x / mask_x, 5), round(image_y / mask_y, 5)
+    # Guard against an unresolved unit mismatch producing an absurd scale that would exhaust GPU memory.
+    if not all(0.01 <= s <= 100 for s in (scale_x, scale_y)):
+        logger.warning("Discarding implausible segmentation scale %s; rendering unscaled.", [scale_x, scale_y])
+        return [1, 1, 1, 1, 1]
+    return [scale_x, scale_y, 1, 1, 1]
 
 
 def get_image_scale(base_metadata, seg_metadata):
@@ -305,5 +427,5 @@ def read_zip_zarr(zarr_url, request_init):
         remote_options={"client_kwargs": request_init},
     )
     # zarr v3 needs an async-capable store; wrap the sync zip filesystem.
-    store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs), read_only=True)
+    store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs, asynchronous=True), read_only=True)
     return zarr.open_group(store, mode="r", use_consolidated=False)

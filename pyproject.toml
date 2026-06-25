@@ -61,6 +61,7 @@ full = [
   "aiohttp>=3.8.1",
   "fsspec>=2022.1.0",
   "python-datauri>=2.2.0",
+  "tifffile>=2023.7.10",
 ]
 # Development dependencies
 dev = [
