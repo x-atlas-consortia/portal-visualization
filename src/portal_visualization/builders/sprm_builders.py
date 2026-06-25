@@ -51,8 +51,10 @@ DEFAULT_SPRM_ANNDATA_FACTORS = [
     "Cell K-Means [Covariance] Expression",
 ]
 
-# Cell set to select/color by default when it is present in the dataset.
-PRIORITIZED_SPRM_CELL_SET = "Cell K-Means [UMAP_All_Features]"
+# Preferred scatterplot embedding + the matching clustering to preselect, UMAP first then t-SNE.
+# Each entry is (obsm embedding path, display name, cell-set clustering name).
+UMAP_EMBEDDING = ("obsm/umap", "UMAP", "Cell K-Means [UMAP_All_Features]")
+TSNE_EMBEDDING = ("obsm/tsne", "t-SNE", "Cell K-Means [tSNE_All_Features]")
 
 # Distinct colors for the first few image channels (RGB). The image controller lets users adjust.
 IMAGE_CHANNEL_COLORS = [
@@ -199,6 +201,13 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
     def _get_bitmask_image_path(self):
         return f"{self._mask_path_regex}/{self._mask_name}" + r"\.ome\.tiff?"
 
+    @staticmethod
+    def _embedding_preference(z):
+        """(embedding path, display name, clustering name) preferring UMAP, falling back to t-SNE."""
+        if z is not None and UMAP_EMBEDDING[0] in z:
+            return UMAP_EMBEDDING
+        return TSNE_EMBEDDING
+
     def _get_n_obs(self, z):
         """Number of cells in the SPRM AnnData store (for the heatmap size gate)."""
         if z is None:
@@ -227,13 +236,14 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         obs_set_names = sorted(set(additional_cluster_names + DEFAULT_SPRM_ANNDATA_FACTORS))
         obs_set_paths = [f"obs/{key}" for key in obs_set_names]
         n_obs = self._get_n_obs(z)
+        embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
 
         anndata_wrapper = AnnDataWrapper(
             adata_url=adata_url,
             is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
-            obs_embedding_paths=["obsm/tsne"],
-            obs_embedding_names=["t-SNE"],
+            obs_embedding_paths=[embedding_path],
+            obs_embedding_names=[embedding_name],
             obs_set_names=obs_set_names,
             obs_set_paths=obs_set_paths,
             # Cells are shown via the (image-aligned) segmentation mask. obsm/xy centroids live in a
@@ -273,12 +283,27 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
         num_image_channels = min(MAX_IMAGE_CHANNELS, (image_metadata or {}).get("SizeC") or 1)
         vc = self._setup_view_config_raster_cellsets_expression_segmentation(
-            vc, dataset, marker, n_obs=n_obs, obs_set_names=obs_set_names, num_image_channels=num_image_channels
+            vc,
+            dataset,
+            marker,
+            n_obs=n_obs,
+            obs_set_names=obs_set_names,
+            num_image_channels=num_image_channels,
+            embedding_name=embedding_name,
+            prioritized_cell_set=prioritized_cell_set,
         )
         return get_conf_cells(vc)
 
     def _setup_view_config_raster_cellsets_expression_segmentation(
-        self, vc, dataset, marker, n_obs=0, obs_set_names=(), num_image_channels=1
+        self,
+        vc,
+        dataset,
+        marker,
+        n_obs=0,
+        obs_set_names=(),
+        num_image_channels=1,
+        embedding_name="t-SNE",
+        prioritized_cell_set=None,
     ):
         # Hide the heatmap for very large datasets (same gate as the AnnData builders) and let the
         # spatial/scatterplot views grow into the freed vertical space.
@@ -288,7 +313,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         description = vc.add_view(cm.DESCRIPTION, dataset=dataset, x=0, y=8, w=3, h=4)
         layer_controller = vc.add_view("layerControllerBeta", dataset=dataset, x=0, y=0, w=3, h=8)
         spatial = vc.add_view("spatialBeta", dataset=dataset, x=3, y=0, w=4, h=views_h)
-        scatterplot = vc.add_view(cm.SCATTERPLOT, dataset=dataset, mapping="t-SNE", x=7, y=0, w=3, h=views_h)
+        scatterplot = vc.add_view(cm.SCATTERPLOT, dataset=dataset, mapping=embedding_name, x=7, y=0, w=3, h=views_h)
         cell_sets = vc.add_view(cm.OBS_SETS, dataset=dataset, x=10, y=5, w=2, h=7)
         gene_list = vc.add_view(cm.FEATURE_LIST, dataset=dataset, x=10, y=0, w=2, h=5).set_props(
             variablesLabelOverride="antigen"
@@ -315,10 +340,10 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             obs_color_encoding.set_value("cellSetSelection")
             for view in (spatial, scatterplot, cell_sets):
                 view.use_coordination(obs_color_encoding)
-            # Prioritize selecting/coloring by the UMAP clustering when the dataset has it.
-            if PRIORITIZED_SPRM_CELL_SET in obs_set_names:
+            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE).
+            if prioritized_cell_set and prioritized_cell_set in obs_set_names:
                 [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
-                obs_set_selection.set_value([[PRIORITIZED_SPRM_CELL_SET]])
+                obs_set_selection.set_value([[prioritized_cell_set]])
                 for view in (spatial, scatterplot, cell_sets):
                     view.use_coordination(obs_set_selection)
 
