@@ -139,10 +139,10 @@ def get_ome_tiff_metadata(url):
     """Read pixel metadata from a (possibly remote) OME-TIFF's OME-XML.
 
     Reads only the TIFF header via range requests rather than downloading the image data. Returns a
-    dict with the channel count (``SizeC``) and physical pixel sizes in the shape ``get_image_scale``
-    expects (``PhysicalSizeX/Y`` plus ``PhysicalSizeUnitX/Y``), or None if it can't be read. The
-    units matter: image and mask may use different units (e.g. µm vs mm), so the raw values must not
-    be compared directly.
+    dict with pixel dimensions (``SizeX``/``SizeY``), channel count (``SizeC``), and physical pixel
+    sizes in the shape ``get_image_scale`` expects (``PhysicalSizeX/Y`` plus ``PhysicalSizeUnitX/Y``),
+    or None if it can't be read. The units matter: image and mask may use different units (e.g. µm vs
+    mm), so the raw values must not be compared directly.
 
     >>> import tifffile, numpy as np, tempfile, os
     >>> path = os.path.join(tempfile.mkdtemp(), "t.ome.tif")
@@ -150,8 +150,8 @@ def get_ome_tiff_metadata(url):
     ...                  metadata={"axes": "CYX", "PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "µm",
     ...                            "PhysicalSizeY": 0.5, "PhysicalSizeYUnit": "µm"})
     >>> meta = get_ome_tiff_metadata(path)
-    >>> (meta["SizeC"], meta["PhysicalSizeX"], meta["PhysicalSizeUnitX"])
-    (3, 0.5, 'µm')
+    >>> (meta["SizeX"], meta["SizeY"], meta["SizeC"], meta["PhysicalSizeX"], meta["PhysicalSizeUnitX"])
+    (40, 30, 3, 0.5, 'µm')
     >>> plain = os.path.join(tempfile.mkdtemp(), "plain.tif")
     >>> tifffile.imwrite(plain, np.zeros((2, 2), dtype=np.uint8), ome=False)
     >>> get_ome_tiff_metadata(plain) is None
@@ -169,8 +169,11 @@ def get_ome_tiff_metadata(url):
         pixels = next((e for e in ElementTree.fromstring(ome_xml).iter() if e.tag.endswith("Pixels")), None)
         if pixels is None:  # pragma: no cover
             return None
-        physical_x, physical_y, size_c = pixels.get("PhysicalSizeX"), pixels.get("PhysicalSizeY"), pixels.get("SizeC")
+        size_x, size_y, size_c = pixels.get("SizeX"), pixels.get("SizeY"), pixels.get("SizeC")
+        physical_x, physical_y = pixels.get("PhysicalSizeX"), pixels.get("PhysicalSizeY")
         return {
+            "SizeX": int(size_x) if size_x else None,
+            "SizeY": int(size_y) if size_y else None,
             "SizeC": int(size_c) if size_c else 1,
             "PhysicalSizeX": float(physical_x) if physical_x else None,
             "PhysicalSizeY": float(physical_y) if physical_y else None,

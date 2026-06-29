@@ -230,6 +230,20 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             members = np.unique(node[:])
         return [[cell_set, str(member)] for member in members]
 
+    def _build_description(self, image_metadata, n_obs):
+        """Summary text for the description view: OME-TIFF header info plus the cell count."""
+        lines = [self._image_name]
+        if image_metadata:
+            size_x, size_y = image_metadata.get("SizeX"), image_metadata.get("SizeY")
+            if size_x and size_y:
+                lines.append(f"Image: {size_x} × {size_y} px, {image_metadata.get('SizeC', 1)} channels")
+            physical_x, unit = image_metadata.get("PhysicalSizeX"), image_metadata.get("PhysicalSizeUnitX")
+            if physical_x and unit:
+                lines.append(f"Pixel size: {physical_x} {unit}")
+        if n_obs:
+            lines.append(f"{n_obs:,} cells")
+        return ". ".join(lines)
+
     def _get_n_obs(self, z):
         """Number of cells in the SPRM AnnData store (for the heatmap size gate)."""
         if z is None:
@@ -313,6 +327,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             num_image_channels=num_image_channels,
             embedding_name=embedding_name,
             prioritized_selection=prioritized_selection,
+            description_text=self._build_description(image_metadata, n_obs),
         )
         return get_conf_cells(vc)
 
@@ -325,6 +340,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         num_image_channels=1,
         embedding_name="t-SNE",
         prioritized_selection=None,
+        description_text="",
     ):
         # Hide the heatmap for very large datasets (same gate as the AnnData builders) and let the
         # spatial/scatterplot views grow into the freed vertical space.
@@ -332,6 +348,8 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         views_h = 8 if include_heatmap else 12
 
         description = vc.add_view(cm.DESCRIPTION, dataset=dataset, x=0, y=8, w=3, h=4)
+        if description_text:
+            description.set_props(description=description_text)
         layer_controller = vc.add_view("layerControllerBeta", dataset=dataset, x=0, y=0, w=3, h=8)
         spatial = vc.add_view("spatialBeta", dataset=dataset, x=3, y=0, w=4, h=views_h)
         scatterplot = vc.add_view(cm.SCATTERPLOT, dataset=dataset, mapping=embedding_name, x=7, y=0, w=3, h=views_h)

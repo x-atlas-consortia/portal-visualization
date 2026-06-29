@@ -1877,6 +1877,14 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     obs["codes"].attrs["categories"] = ["X", "Y"]
     assert builder._prioritized_cell_set_selection(z, ["codes"], "codes") == [["codes", "X"], ["codes", "Y"]]
 
+    # _build_description: image-name only when no metadata; OME header info + cell count when present.
+    assert builder._build_description(None, 0) == "r1_expr"
+    description_text = builder._build_description(
+        {"SizeX": 2048, "SizeY": 1024, "SizeC": 18, "PhysicalSizeX": 0.5, "PhysicalSizeUnitX": "µm"},
+        12345,
+    )
+    assert description_text == "r1_expr. Image: 2048 × 1024 px, 18 channels. Pixel size: 0.5 µm. 12,345 cells"
+
     # Large dataset: heatmap hidden, beta views used, prioritized cell set selected, multi-channel image.
     prioritized_selection = [[umap_cell_set, "0"], [umap_cell_set, "1"]]
     vc, dataset = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
@@ -1888,8 +1896,11 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
         num_image_channels=6,
         embedding_name=UMAP_EMBEDDING[1],
         prioritized_selection=prioritized_selection,
+        description_text=description_text,
     )
     conf = vc.to_dict()
+    description_view = next(v for v in conf["layout"] if v["component"] == "description")
+    assert description_view["props"]["description"] == description_text
     layout_str = json.dumps(conf["layout"])
     assert "heatmap" not in layout_str.lower()
     assert "spatialBeta" in layout_str
