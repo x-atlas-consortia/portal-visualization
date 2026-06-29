@@ -1855,28 +1855,46 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     obsm["xy"] = np.zeros((7, 2))
     assert builder._get_n_obs(None) == 0
     assert builder._get_n_obs(z) == 7
-    z.create_group("obs")["_index"] = np.asarray([str(i) for i in range(9)])
+    obs = z.create_group("obs")
+    obs["_index"] = np.asarray([str(i) for i in range(9)])
     assert builder._get_n_obs(z) == 9
 
-    # Large dataset: heatmap hidden, beta views used, prioritized cell set selected, multi-channel image.
+    # _prioritized_cell_set_selection: one path per cluster ID; None when the clustering is absent.
     umap_cell_set = UMAP_EMBEDDING[2]
+    obs[umap_cell_set] = np.asarray([0, 1, 2, 1, 0])  # plain (non-categorical) cluster IDs
+    assert builder._prioritized_cell_set_selection(z, [umap_cell_set], umap_cell_set) == [
+        [umap_cell_set, "0"],
+        [umap_cell_set, "1"],
+        [umap_cell_set, "2"],
+    ]
+    assert builder._prioritized_cell_set_selection(z, [], umap_cell_set) is None  # not in obs_set_names
+    assert builder._prioritized_cell_set_selection(z, ["absent"], "absent") is None  # not in obs
+    assert builder._prioritized_cell_set_selection(None, [umap_cell_set], umap_cell_set) is None
+    # Categorical encodings: group with a `categories` array, and codes array with attrs["categories"].
+    obs.create_group("grp")["categories"] = np.asarray(["A", "B"])
+    assert builder._prioritized_cell_set_selection(z, ["grp"], "grp") == [["grp", "A"], ["grp", "B"]]
+    obs["codes"] = np.asarray([0, 1, 0])
+    obs["codes"].attrs["categories"] = ["X", "Y"]
+    assert builder._prioritized_cell_set_selection(z, ["codes"], "codes") == [["codes", "X"], ["codes", "Y"]]
+
+    # Large dataset: heatmap hidden, beta views used, prioritized cell set selected, multi-channel image.
+    prioritized_selection = [[umap_cell_set, "0"], [umap_cell_set, "1"]]
     vc, dataset = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
     builder._setup_view_config_raster_cellsets_expression_segmentation(
         vc,
         dataset,
         marker=None,
         n_obs=150_000,
-        obs_set_names=[umap_cell_set],
         num_image_channels=6,
         embedding_name=UMAP_EMBEDDING[1],
-        prioritized_cell_set=umap_cell_set,
+        prioritized_selection=prioritized_selection,
     )
     conf = vc.to_dict()
     layout_str = json.dumps(conf["layout"])
     assert "heatmap" not in layout_str.lower()
     assert "spatialBeta" in layout_str
     assert "layerControllerBeta" in layout_str
-    assert umap_cell_set in json.dumps(conf["coordinationSpace"])
+    assert conf["coordinationSpace"]["obsSetSelection"]["A"] == prioritized_selection
     assert conf["coordinationSpace"]["embeddingType"]["A"] == "UMAP"
     # First 6 image channels, each with its distinct color.
     channel_colors = list(conf["coordinationSpace"].get("spatialChannelColor", {}).values())
@@ -1885,9 +1903,7 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
 
     # Small dataset: heatmap present.
     vc2, dataset2 = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
-    builder._setup_view_config_raster_cellsets_expression_segmentation(
-        vc2, dataset2, marker=None, n_obs=5, obs_set_names=[]
-    )
+    builder._setup_view_config_raster_cellsets_expression_segmentation(vc2, dataset2, marker=None, n_obs=5)
     assert "heatmap" in json.dumps(vc2.to_dict()["layout"]).lower()
 
 

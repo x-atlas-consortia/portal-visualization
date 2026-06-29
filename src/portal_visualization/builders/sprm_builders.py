@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+import numpy as np
 from vitessce import (
     AnnDataWrapper,
     CoordinationType,
@@ -208,6 +209,27 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             return UMAP_EMBEDDING
         return TSNE_EMBEDDING
 
+    @staticmethod
+    def _prioritized_cell_set_selection(z, obs_set_names, cell_set):
+        """obsSetSelection paths (one per cluster ID) so the whole clustering is preselected.
+
+        A group-level path alone does not preselect the members, so enumerate them (mirroring the
+        multiome builder's cell-set preselection). Reads the cluster labels across the anndata
+        categorical encodings. Returns None when the clustering isn't present.
+        """
+        if z is None or cell_set not in obs_set_names or "obs" not in z or cell_set not in z["obs"]:
+            return None
+        obs = z["obs"]
+        node = obs[cell_set]
+        if not hasattr(node, "shape"):  # categorical stored as a group with a `categories` array
+            members = node["categories"][:]
+        elif "categories" in node.attrs:  # codes array; attrs hold the labels or name a sibling array
+            cats = node.attrs["categories"]
+            members = obs[cats][:] if isinstance(cats, str) else cats
+        else:  # plain (non-categorical) column: the distinct values are the cluster IDs
+            members = np.unique(node[:])
+        return [[cell_set, str(member)] for member in members]
+
     def _get_n_obs(self, z):
         """Number of cells in the SPRM AnnData store (for the heatmap size gate)."""
         if z is None:
@@ -237,6 +259,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         obs_set_paths = [f"obs/{key}" for key in obs_set_names]
         n_obs = self._get_n_obs(z)
         embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
+        prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, prioritized_cell_set)
 
         anndata_wrapper = AnnDataWrapper(
             adata_url=adata_url,
@@ -287,10 +310,9 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             dataset,
             marker,
             n_obs=n_obs,
-            obs_set_names=obs_set_names,
             num_image_channels=num_image_channels,
             embedding_name=embedding_name,
-            prioritized_cell_set=prioritized_cell_set,
+            prioritized_selection=prioritized_selection,
         )
         return get_conf_cells(vc)
 
@@ -300,10 +322,9 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         dataset,
         marker,
         n_obs=0,
-        obs_set_names=(),
         num_image_channels=1,
         embedding_name="t-SNE",
-        prioritized_cell_set=None,
+        prioritized_selection=None,
     ):
         # Hide the heatmap for very large datasets (same gate as the AnnData builders) and let the
         # spatial/scatterplot views grow into the freed vertical space.
@@ -340,10 +361,11 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             obs_color_encoding.set_value("cellSetSelection")
             for view in (spatial, scatterplot, cell_sets):
                 view.use_coordination(obs_color_encoding)
-            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE).
-            if prioritized_cell_set and prioritized_cell_set in obs_set_names:
+            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE),
+            # enumerating each cluster ID so the whole clustering is selected initially.
+            if prioritized_selection:
                 [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
-                obs_set_selection.set_value([[prioritized_cell_set]])
+                obs_set_selection.set_value(prioritized_selection)
                 for view in (spatial, scatterplot, cell_sets):
                     view.use_coordination(obs_set_selection)
 
