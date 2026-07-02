@@ -817,14 +817,19 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         # selected genomic profiles, each clustering needs its own view config.
         self._is_annotated = self.is_annotated
         confs = []
+        # Each clustering maps to its own multivec zarr (3rd element), matching the names written by
+        # portal-containers' mudata-to-ui. Annotation columns each get their own multivec; the genomic
+        # profiles for a clustering can't come from another clustering's multivec.
         cluster_columns = [
             ["leiden_wnn", "Leiden (Weighted Nearest Neighbor)", "wnn"],
             ["cluster_atac", "ArchR Clusters (ATAC)", "cbb"] if self.has_cbb else None,
             ["leiden_rna", "Leiden (RNA)", "rna"],
             ["predicted_label", "Cell Ontology Annotation", "label"] if self._is_annotated else None,
-            ["full_hierarchical_labels", "Full Hierarchical Labels", "label"] if self._is_annotated else None,
-            ["final_level_labels", "Final Level Labels", "label"] if self._is_annotated else None,
-            ["CL_Label", "CL Label", "label"] if self._is_annotated else None,
+            ["full_hierarchical_labels", "Full Hierarchical Labels", "full_hierarchical_labels"]
+            if self._is_annotated
+            else None,
+            ["final_level_labels", "Final Level Labels", "final_level_labels"] if self._is_annotated else None,
+            ["CL_Label", "CL Label", "CL_Label"] if self._is_annotated else None,
         ]
 
         cluster_columns = [
@@ -847,10 +852,21 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             modality_prefix="mod/rna",
         )
 
-        for column_name, column_label, multivec_label in cluster_columns:
-            vc, _ = self._create_vitessce_config(name=f"{column_label}")
-            dataset = self._set_up_dataset(vc, multivec_label)
-            vc = self._setup_anndata_view_config(vc, dataset, column_name, column_label)
+        if self.has_cbb:
+            # Genomic profiles need the ATAC cell-by-bin multivecs, which mudata-to-ui only writes when
+            # cbb is present. One config per clustering so each shows its own genomic-profiles tracks.
+            for column_name, column_label, multivec_label in cluster_columns:
+                vc, _ = self._create_vitessce_config(name=f"{column_label}")
+                dataset = self._set_up_dataset(vc, multivec_label)
+                vc = self._setup_anndata_view_config(vc, dataset, column_name, column_label)
+                vc = self._link_marker_gene(vc)
+                confs.append(vc.to_dict())
+        else:
+            # No cbb -> no multivec zarrs exist -> a single config with every clustering selectable in
+            # the cell-sets view, scatterplots and feature lists, but no genomic-profiles view.
+            vc, _ = self._create_vitessce_config(name="Multiome")
+            dataset = self._set_up_dataset(vc, multivec_label=None)
+            vc = self._setup_anndata_view_config(vc, dataset, None, None, with_genomic_profiles=False)
             vc = self._link_marker_gene(vc)
             confs.append(vc.to_dict())
         return get_conf_cells(confs)
@@ -870,18 +886,21 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             atac_cbg_zarr = self._build_assets_url(f"{zarr_path}/mod/atac_cbg", use_token=False)
             rna_prefix = atac_prefix = ""
 
-        multivec_suffix = ".multivec.zarr.zip" if self._is_zarr_zip else ".multivec.zarr"
-        multivec_zarr = self._build_assets_url(f"{zarr_base}/{multivec_label}{multivec_suffix}", use_token=False)
-        dataset = (
-            vc.add_dataset(name=multivec_label)
-            .add_object(
+        # Genomic profiles read from a per-clustering multivec zarr; skip it when there's no cbb
+        # (no multivec is generated then) so we don't reference a store that doesn't exist.
+        dataset = vc.add_dataset(name=multivec_label if multivec_label is not None else self._uuid)
+        if multivec_label is not None:
+            multivec_suffix = ".multivec.zarr.zip" if self._is_zarr_zip else ".multivec.zarr"
+            multivec_zarr = self._build_assets_url(f"{zarr_base}/{multivec_label}{multivec_suffix}", use_token=False)
+            dataset = dataset.add_object(
                 MultivecZarrWrapper(
                     zarr_url=multivec_zarr,
                     is_zip=self._is_zarr_zip,
                     request_init=self._get_request_init(),
                 )
             )
-            .add_object(
+        dataset = (
+            dataset.add_object(
                 AnnDataWrapper(
                     # We run add_object with adata_path=rna_zarr first to add the cell-by-gene
                     # matrix and associated metadata.
@@ -936,7 +955,7 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         )
         return dataset
 
-    def _setup_anndata_view_config(self, vc, dataset, column_name, column_label):
+    def _setup_anndata_view_config(self, vc, dataset, column_name, column_label, with_genomic_profiles=True):
         umap_scatterplot_by_rna = vc.add_view(vt.SCATTERPLOT, dataset=dataset, mapping="UMAP - RNA").set_props(
             embeddingCellSetLabelsVisible=False
         )
@@ -950,10 +969,10 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         gene_list = vc.add_view(vt.FEATURE_LIST, dataset=dataset)
         peak_list = vc.add_view(vt.FEATURE_LIST, dataset=dataset)
 
-        # rna_heatmap = vc.add_view(vt.HEATMAP, dataset=dataset).set_props(transpose=False)
-        # atac_heatmap = vc.add_view(vt.HEATMAP, dataset=dataset).set_props(transpose=False)
-        genomic_profiles = vc.add_view(vt.GENOMIC_PROFILES, dataset=dataset)
-        genomic_profiles.set_props(title=f"{column_label} Genomic Profiles")
+        genomic_profiles = None
+        if with_genomic_profiles:
+            genomic_profiles = vc.add_view(vt.GENOMIC_PROFILES, dataset=dataset)
+            genomic_profiles.set_props(title=f"{column_label} Genomic Profiles")
 
         cell_sets = vc.add_view(vt.OBS_SETS, dataset=dataset)
 
@@ -965,17 +984,8 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
         vc.link_views([umap_scatterplot_by_rna, gene_list], coordination_types, ["gene", "expression"])
         vc.link_views([umap_scatterplot_by_atac, peak_list], coordination_types, ["peak", "count"])
 
-        # Coordinate the selection of cell sets between the scatterplots and lists
-        # of features/observations.
-        coordination_types = [
-            ct.FEATURE_SELECTION,
-            ct.OBS_COLOR_ENCODING,
-            ct.FEATURE_VALUE_COLORMAP_RANGE,
-            ct.OBS_SET_SELECTION,
-        ]
-
-        label_names = self._get_obs_set_members(column_name)
-        obs_set_coordinations = [[column_label, str(i)] for i in label_names]
+        # Feature (gene/peak) selection and colormap range are shared by the scatterplots and lists,
+        # but not by the genomic profiles view (which is driven by cell sets, not feature selection).
         vc.link_views(
             [
                 umap_scatterplot_by_rna,
@@ -985,15 +995,30 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
                 peak_list,
                 cell_sets,
             ],
-            coordination_types,
-            [None, "cellSetSelection", [0.0, 1.0], obs_set_coordinations],
+            [ct.FEATURE_SELECTION, ct.FEATURE_VALUE_COLORMAP_RANGE],
+            [None, [0.0, 1.0]],
         )
 
-        # Indicate genomic profiles' clusters; based on the display name for the ATAC CBB clusters.
+        # Cell-set selection and color encoding live on a single shared scope used by EVERY view,
+        # including the genomic profiles, so selecting clusters in one view updates them all.
+        obs_set_coordinations = (
+            [[column_label, str(i)] for i in self._get_obs_set_members(column_name)] if column_name else None
+        )
         obs_set_coordination, obs_color_coordination = vc.add_coordination(ct.OBS_SET_SELECTION, ct.OBS_COLOR_ENCODING)
-        genomic_profiles.use_coordination(obs_set_coordination, obs_color_coordination)
         obs_set_coordination.set_value(obs_set_coordinations)
         obs_color_coordination.set_value("cellSetSelection")
+        views_sharing_cell_sets = [
+            umap_scatterplot_by_rna,
+            umap_scatterplot_by_atac,
+            umap_scatterplot_by_wnn,
+            gene_list,
+            peak_list,
+            cell_sets,
+        ]
+        if genomic_profiles is not None:
+            views_sharing_cell_sets.append(genomic_profiles)
+        for view in views_sharing_cell_sets:
+            view.use_coordination(obs_set_coordination, obs_color_coordination)
 
         # Hide numeric cluster labels
         vc.link_views(
@@ -1002,19 +1027,24 @@ class MultiomicAnndataZarrViewConfBuilder(RNASeqAnnDataZarrViewConfBuilder):
             [False],
         )
 
-        vc.layout(
-            ((umap_scatterplot_by_rna | umap_scatterplot_by_atac) | (umap_scatterplot_by_wnn | cell_sets))
-            / (genomic_profiles | (peak_list | gene_list))
-        )
+        top_row = (umap_scatterplot_by_rna | umap_scatterplot_by_atac) | (umap_scatterplot_by_wnn | cell_sets)
+        if genomic_profiles is not None:
+            vc.layout(top_row / (genomic_profiles | (peak_list | gene_list)))
+        else:
+            vc.layout(top_row / (peak_list | gene_list))
 
         self._views = [
-            umap_scatterplot_by_rna,
-            umap_scatterplot_by_atac,
-            umap_scatterplot_by_wnn,
-            gene_list,
-            peak_list,
-            genomic_profiles,
-            cell_sets,
+            view
+            for view in [
+                umap_scatterplot_by_rna,
+                umap_scatterplot_by_atac,
+                umap_scatterplot_by_wnn,
+                gene_list,
+                peak_list,
+                genomic_profiles,
+                cell_sets,
+            ]
+            if view is not None
         ]
         return vc
 

@@ -2088,6 +2088,72 @@ def test_multiome_get_obs_set_members_encodings():
 
 
 @pytest_requires_full
+def test_multiome_genomic_profiles_per_column_and_coordination():
+    """With cbb, each clustering gets its OWN multivec (not a shared 'label' one), and the
+    genomic-profiles view shares the scatterplots' cell-set scope so selections stay in sync.
+    Without cbb there are no multivecs, so a single config with no genomic-profiles view."""
+    from src.portal_visualization.builders.anndata_builders import MultiomicAnndataZarrViewConfBuilder
+
+    from .fixtures import make_entity
+
+    def store(with_cbb):
+        z = zarr.open_group()
+        obs = z.create_group("mod/rna/obs")
+        obs["_index"] = np.asarray([f"c{i}" for i in range(6)])
+        for name in [
+            "leiden_wnn",
+            "leiden_rna",
+            "cluster_atac",
+            "full_hierarchical_labels",
+            "final_level_labels",
+            "CL_Label",
+        ]:
+            obs.create_group(name)["categories"] = np.asarray(["0", "1", "2"])
+        z.create_group("mod/atac_cbg/obs")
+        if with_cbb:
+            z.create_group("mod/atac_cbb")
+        flag = z.create_array("mod/rna/uns/annotation_metadata/is_annotated", shape=(), dtype=bool)
+        flag[()] = True
+        return z
+
+    entity = make_entity(uuid="multiome-cbb", hints=["rna", "atac", "is_annotated", "is_sc"], soft_assaytype="multiome")
+
+    builder = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+    builder.__dict__["zarr_store"] = store(with_cbb=True)
+    confs, _ = builder.get_conf_cells()
+
+    def multivec_urls(config):
+        return [
+            f["url"] for d in config["datasets"] for f in d["files"] if f.get("fileType") == "genomic-profiles.zarr"
+        ]
+
+    by_name = {c["name"]: c for c in confs}
+    # Each clustering references its OWN multivec zarr, matching mudata-to-ui's per-column names.
+    for name, multivec in {
+        "Leiden (RNA)": "rna.multivec.zarr",
+        "Full Hierarchical Labels": "full_hierarchical_labels.multivec.zarr",
+        "Final Level Labels": "final_level_labels.multivec.zarr",
+        "CL Label": "CL_Label.multivec.zarr",
+    }.items():
+        assert name in by_name, name
+        assert any(u.endswith(multivec) for u in multivec_urls(by_name[name])), (name, multivec_urls(by_name[name]))
+
+    # Genomic profiles share the scatterplots' cell-set selection + color encoding scope.
+    for c in confs:
+        gp = next(v for v in c["layout"] if v["component"] == "genomicProfiles")
+        sp = next(v for v in c["layout"] if v["component"] == "scatterplot")
+        assert gp["coordinationScopes"]["obsSetSelection"] == sp["coordinationScopes"]["obsSetSelection"]
+        assert gp["coordinationScopes"]["obsColorEncoding"] == sp["coordinationScopes"]["obsColorEncoding"]
+
+    # No cbb -> no multivecs -> a single config, no genomic-profiles view.
+    builder_no_cbb = MultiomicAnndataZarrViewConfBuilder(entity, "token", "https://example.com")
+    builder_no_cbb.__dict__["zarr_store"] = store(with_cbb=False)
+    confs_no_cbb, _ = builder_no_cbb.get_conf_cells()
+    assert len(confs_no_cbb) == 1
+    assert not any(v["component"] == "genomicProfiles" for v in confs_no_cbb[0]["layout"])
+
+
+@pytest_requires_full
 def test_kaggle1_builder_parent_as_dict(mocker):
     """Test that Kaggle1 builder handles parent passed as full entity dict (as in client.py)."""
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
