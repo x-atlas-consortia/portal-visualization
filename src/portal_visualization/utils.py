@@ -13,9 +13,27 @@ from fsspec.implementations.zip import ZipFileSystem
 from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
-from .constants import image_units
+from .constants import PORTAL_VIS_USER_AGENT, image_units
 
 logger = logging.getLogger(__name__)
+
+
+def with_config_builder_user_agent(request_init):
+    """Merge the config-builder User-Agent into a server-side request's headers.
+
+    The back-end throttles scraping by User-Agent (default aiohttp/requests/urllib UAs); config
+    building makes many server-side requests, so tag them with a distinctive UA the back-end can
+    whitelist. Server-side only: the browser sets its own User-Agent and can't override it, so
+    this is deliberately kept out of the browser-facing ``_get_request_init``.
+
+    >>> with_config_builder_user_agent(None)
+    {'headers': {'User-Agent': 'hubmap-portal-visualization'}}
+    >>> with_config_builder_user_agent({'headers': {'Authorization': 'Bearer x'}})
+    {'headers': {'User-Agent': 'hubmap-portal-visualization', 'Authorization': 'Bearer x'}}
+    """
+    request_init = dict(request_init or {})
+    request_init["headers"] = {"User-Agent": PORTAL_VIS_USER_AGENT, **request_init.get("headers", {})}
+    return request_init
 
 
 def get_matches(files, regex):
@@ -122,7 +140,7 @@ def get_image_metadata(self, img_url):
     """
 
     meta_data = None
-    request_init = self._get_request_init() or {}
+    request_init = with_config_builder_user_agent(self._get_request_init())
     response = requests.get(img_url, **request_init)
     if response.status_code == 200:  # pragma: no cover
         data = response.json()
@@ -427,7 +445,7 @@ def read_zip_zarr(zarr_url, request_init):
     fs = _SafeZipFileSystem(
         fo=zarr_url,
         remote_protocol="https",
-        remote_options={"client_kwargs": request_init},
+        remote_options={"client_kwargs": with_config_builder_user_agent(request_init)},
     )
     # zarr v3 needs an async-capable store; wrap the sync zip filesystem.
     store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs, asynchronous=True), read_only=True)

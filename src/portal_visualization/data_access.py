@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 try:
     import zarr
 
-    from .utils import read_zip_zarr
+    from .utils import read_zip_zarr, with_config_builder_user_agent
 
     _FULL_DEPS_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -118,7 +118,8 @@ class ZarrStoreAccessor:
                 return None
         else:
             zarr_url = self._url_builder(path, use_token=False)
-            return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": request_init})
+            client_kwargs = with_config_builder_user_agent(request_init)
+            return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": client_kwargs})
 
 
 class ImageMetadataRetriever:

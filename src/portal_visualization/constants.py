@@ -13,3 +13,8 @@ XENIUM_ZARR_PATH = "Xenium.zarr"
 
 # Maximum number of observations to display heatmaps for performance reasons
 MAX_OBS_FOR_HEATMAP = 100_000
+
+# User-Agent sent on server-side requests made while building a Vitessce config. It must NOT match
+# the back-end's scraping filter, so the config builder's traffic can be whitelisted:
+# ~*(?i)(aiohttp|python-httpx|python-requests|Python-urllib)
+PORTAL_VIS_USER_AGENT = "portal-visualization-config-builder"

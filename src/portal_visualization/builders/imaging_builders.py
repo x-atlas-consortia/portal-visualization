@@ -40,6 +40,7 @@ from ..utils import (
     get_image_scale,
     get_matches,
     group_by_file_name,
+    with_config_builder_user_agent,
 )
 from .base_builders import ViewConfBuilder
 
@@ -235,7 +236,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             if not area_zarr_url:
                 return
 
-            request_init = self._get_request_init() or {}
+            request_init = with_config_builder_user_agent(self._get_request_init())
 
             if self._is_zarr_zip:
                 response = requests.get(area_zarr_url, **request_init)

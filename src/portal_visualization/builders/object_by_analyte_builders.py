@@ -3,7 +3,7 @@ from functools import cached_property
 from vitessce import AnnDataWrapper
 from vitessce import Component as cm
 
-from ..utils import get_conf_cells, read_zip_zarr
+from ..utils import get_conf_cells, read_zip_zarr, with_config_builder_user_agent
 from .base_builders import ViewConfBuilder
 
 """
@@ -61,7 +61,7 @@ class ObjectByAnalyteConfBuilder(ViewConfBuilder):
                 url = super()._build_assets_url(file)
                 import requests
 
-                resp = requests.get(url)
+                resp = requests.get(url, **with_config_builder_user_agent(self._get_request_init()))
                 resp.raise_for_status()
                 json = resp.json()
                 if json:

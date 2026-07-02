@@ -1457,6 +1457,23 @@ for test_id, entity in programmatic_test_cases:
         has_visualization_test_cases.append((True, entity))
 
 
+# A published dataset yields request_init=None; a QA one yields an Authorization header. The UA
+# must be added in both cases without dropping any existing header.
+@pytest.mark.parametrize("request_init", [None, {}, {"headers": {"Authorization": "Bearer x"}}])
+def test_config_builder_user_agent_evades_scraping_filter(request_init):
+    """Server-side config-builder requests must carry a UA the back-end won't throttle."""
+    import re
+
+    from src.portal_visualization.utils import with_config_builder_user_agent
+
+    headers = with_config_builder_user_agent(request_init)["headers"]
+    # Must not match the back-end scraping filter (see PORTAL_VIS_USER_AGENT).
+    assert not re.search(r"(?i)(aiohttp|python-httpx|python-requests|python-urllib)", headers["User-Agent"])
+    # Existing headers must be preserved.
+    if request_init and request_init.get("headers"):
+        assert headers["Authorization"] == "Bearer x"
+
+
 @pytest.mark.requires_full
 def test_read_zip_zarr_opens_store(mocker):
     # Mock the zarr v3 store wiring so no network access occurs.
