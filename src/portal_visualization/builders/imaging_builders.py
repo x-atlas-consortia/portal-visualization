@@ -10,9 +10,7 @@ import requests
 from vitessce import (
     AnnDataWrapper,
     ImageOmeTiffWrapper,
-    MultiImageWrapper,
     ObsSegmentationsOmeTiffWrapper,
-    OmeTiffWrapper,
     get_initial_coordination_scope_prefix,
 )
 from vitessce import (
@@ -67,7 +65,6 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
         self.image_pyramid_regex = None
         self.seg_image_pyramid_regex = None
         self.use_full_resolution = []
-        self.use_physical_size_scaling = False
         self.view_type = BASE_IMAGE_VIEW_TYPE
         self.base_image_metadata = None
         self.seg_channel_count = 1
@@ -304,14 +301,20 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             )
         return entries
 
-    def _setup_view_config(self, vc, dataset, view_type, disable_3d=[], use_full_resolution=[]):
+    def _setup_view_config(self, vc, dataset, view_type, disable_3d=[], use_full_resolution=[], image_fileuids=None):
         if view_type == BASE_IMAGE_VIEW_TYPE:
-            vc.add_view(cm.SPATIAL, dataset=dataset, x=3, y=0, w=9, h=12).set_props(
+            spatial_view = vc.add_view("spatialBeta", dataset=dataset, x=3, y=0, w=9, h=12).set_props(
                 useFullResolutionImage=use_full_resolution
             )
             vc.add_view(cm.DESCRIPTION, dataset=dataset, x=0, y=8, w=3, h=4)
-            vc.add_view(cm.LAYER_CONTROLLER, dataset=dataset, x=0, y=0, w=3, h=8).set_props(
+            lc_view = vc.add_view("layerControllerBeta", dataset=dataset, x=0, y=0, w=3, h=8).set_props(
                 disable3d=disable_3d, disableChannelsIfRgbDetected=True
+            )
+            vc.link_views_by_dict(
+                [spatial_view, lc_view],
+                {"imageLayer": CL([{"fileUid": uid} for uid in (image_fileuids or [])])},
+                meta=True,
+                scope_prefix=get_initial_coordination_scope_prefix("A", "image"),
             )
         if view_type == GEOMX_IMAGE_VIEW_TYPE:
             self._add_views(vc, dataset)
@@ -419,25 +422,28 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
                 self._add_segmentation_image(dataset)
 
         else:
-            images = [
-                OmeTiffWrapper(
-                    img_url=img_url,
-                    offsets_url=offsets_url,
-                    name=Path(img_path).name,
+            image_fileuids = [f"image_{i}" for i in range(len(found_images))]
+            for fileuid, img_path in zip(image_fileuids, found_images, strict=True):
+                img_url, offsets_url, _ = get_img_and_offset_url_func(img_path, self.image_pyramid_regex)
+                dataset.add_object(
+                    ImageOmeTiffWrapper(
+                        img_url=img_url,
+                        offsets_url=offsets_url,
+                        name=Path(img_path).name,
+                        coordination_values={"fileUid": fileuid},
+                    )
                 )
-                for img_path in found_images
-                for img_url, offsets_url, _ in [get_img_and_offset_url_func(img_path, self.image_pyramid_regex)]
-            ]
-            dataset.add_object(MultiImageWrapper(images, use_physical_size_scaling=self.use_physical_size_scaling))
 
         if self.view_type == GEOMX_IMAGE_VIEW_TYPE:
             self._add_aoi_rois(dataset)
             self._get_seg_channel_info()
         conf = self._setup_view_config(
-            vc, dataset, self.view_type, use_full_resolution=self.use_full_resolution
+            vc,
+            dataset,
+            self.view_type,
+            use_full_resolution=self.use_full_resolution,
+            image_fileuids=image_fileuids if self.view_type == BASE_IMAGE_VIEW_TYPE else None,
         ).to_dict()
-        if self.view_type == BASE_IMAGE_VIEW_TYPE:
-            del conf["datasets"][0]["files"][0]["options"]["renderLayers"]
         return get_conf_cells(conf)
 
 
@@ -668,7 +674,8 @@ class NanoDESIViewConfBuilder(ImagePyramidViewConfBuilder):
             Path(file["rel_path"]).name for file in self._entity["files"] if not file["rel_path"].endswith("json")
         ]
         self.use_full_resolution = image_names
-        self.use_physical_size_scaling = True
+        # ponytail: spatialBeta reads physical pixel size from OME metadata automatically,
+        # so the old raster.json usePhysicalSizeScaling flag is no longer needed.
 
 
 class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
@@ -688,27 +695,28 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
         confs = []
         # Build up a conf for each Pos.
         for images in images_by_pos:
-            image_wrappers = []
             pos_name = self._get_pos_name(images[0])
             vc, dataset = self._create_vitessce_config(name=pos_name, dataset_name=pos_name)
             sorted_images = sorted(images, key=self._get_hybcycle)
-            for img_path in sorted_images:
+            image_fileuids = [f"image_{i}" for i in range(len(sorted_images))]
+            for fileuid, img_path in zip(image_fileuids, sorted_images, strict=True):
                 img_url, offsets_url, _ = self._get_img_and_offset_url(img_path, IMAGE_PYRAMID_DIR)
-                image_wrappers.append(
-                    OmeTiffWrapper(
+                dataset.add_object(
+                    ImageOmeTiffWrapper(
                         img_url=img_url,
                         offsets_url=offsets_url,
                         name=self._get_hybcycle(img_path),
+                        coordination_values={"fileUid": fileuid},
                     )
                 )
-            dataset = dataset.add_object(MultiImageWrapper(image_wrappers))
             vc = self._setup_view_config(
-                vc, dataset, self.view_type, disable_3d=[self._get_hybcycle(img_path) for img_path in sorted_images]
+                vc,
+                dataset,
+                self.view_type,
+                disable_3d=[self._get_hybcycle(img_path) for img_path in sorted_images],
+                image_fileuids=image_fileuids,
             )
-            conf = vc.to_dict()
-            # Don't want to render all layers
-            del conf["datasets"][0]["files"][0]["options"]["renderLayers"]
-            confs.append(conf)
+            confs.append(vc.to_dict())
         return get_conf_cells(confs)
 
     def _get_hybcycle(self, image_path):
