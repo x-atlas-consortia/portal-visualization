@@ -16,7 +16,7 @@ maintainers = [
   { name = "John Conroy", email = "john_conroy@hms.harvard.edu" },
   { name = "Lisa Choy", email = "lisa_choy@hms.harvard.edu" },
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 keywords = [
   "hubmap",
   "vitessce",
@@ -34,8 +34,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3 :: Only",
@@ -50,7 +48,7 @@ dependencies = []
 [project.optional-dependencies]
 # Full install - required for actual visualization generation
 full = [
-  "vitessce==3.7.4",
+  "vitessce==3.9.2",
   "hubmap-commons>=2.0.15",
   # Flask/werkzeug are needed for the full HuBMAP Search API client functionality
   "flask>=2.0.0",
@@ -61,6 +59,7 @@ full = [
   "aiohttp>=3.8.1",
   "fsspec>=2022.1.0",
   "python-datauri>=2.2.0",
+  "tifffile>=2023.7.10",
 ]
 # Development dependencies
 dev = [
@@ -111,7 +110,7 @@ markers = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 exclude = [".venv", ".git", "__pycache__", "build", "dist", "*.egg-info"]
 
 [tool.ruff.lint]

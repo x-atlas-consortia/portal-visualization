@@ -1,19 +1,26 @@
 import re
 from pathlib import Path
 
+import numpy as np
 from vitessce import (
     AnnDataWrapper,
     CoordinationType,
-    MultiImageWrapper,
+    ImageOmeTiffWrapper,
+    ObsSegmentationsOmeTiffWrapper,
     OmeTiffWrapper,
+    get_initial_coordination_scope_prefix,
 )
 from vitessce import (
     Component as cm,
 )
 from vitessce import (
+    CoordinationLevel as CL,
+)
+from vitessce import (
     FileType as ft,
 )
 
+from ..constants import MAX_OBS_FOR_HEATMAP
 from ..paths import (
     CODEX_TILE_DIR,
     IMAGE_PYRAMID_DIR,
@@ -23,7 +30,13 @@ from ..paths import (
     STITCHED_REGEX,
     TILE_REGEX,
 )
-from ..utils import create_coordination_values, get_conf_cells, get_matches
+from ..utils import (
+    create_coordination_values,
+    get_conf_cells,
+    get_matches,
+    get_ome_tiff_metadata,
+    get_segmentation_alignment_scale,
+)
 from .base_builders import ViewConfBuilder
 from .imaging_builders import ImagePyramidViewConfBuilder
 
@@ -38,6 +51,22 @@ DEFAULT_SPRM_ANNDATA_FACTORS = [
     "Cell K-Means [Total] Expression",
     "Cell K-Means [Covariance] Expression",
 ]
+
+# Preferred scatterplot embedding + the matching clustering to preselect, UMAP first then t-SNE.
+# Each entry is (obsm embedding path, display name, cell-set clustering name).
+UMAP_EMBEDDING = ("obsm/umap", "UMAP", "Cell K-Means [UMAP_All_Features]")
+TSNE_EMBEDDING = ("obsm/tsne", "t-SNE", "Cell K-Means [tSNE_All_Features]")
+
+# Distinct colors for the first few image channels (RGB). The image controller lets users adjust.
+IMAGE_CHANNEL_COLORS = [
+    [255, 0, 0],
+    [0, 255, 0],
+    [0, 0, 255],
+    [255, 255, 0],
+    [255, 0, 255],
+    [0, 255, 255],
+]
+MAX_IMAGE_CHANNELS = len(IMAGE_CHANNEL_COLORS)
 
 
 class CytokitSPRMViewConfigError(Exception):
@@ -173,14 +202,85 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
     def _get_bitmask_image_path(self):
         return f"{self._mask_path_regex}/{self._mask_name}" + r"\.ome\.tiff?"
 
-    def _get_ometiff_mask_wrapper(self, found_bitmask_file):
-        bitmask_img_url, bitmask_offsets_url, _ = self._get_img_and_offset_url(
-            found_bitmask_file,
-            self.image_pyramid_regex,
-        )
-        return OmeTiffWrapper(
-            img_url=bitmask_img_url, offsets_url=bitmask_offsets_url, name=self._mask_name, is_bitmask=True
-        )
+    @staticmethod
+    def _embedding_preference(z):
+        """(embedding path, display name, clustering name) preferring UMAP, falling back to t-SNE."""
+        if z is not None and UMAP_EMBEDDING[0] in z:
+            return UMAP_EMBEDDING
+        return TSNE_EMBEDDING
+
+    @staticmethod
+    def _prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets):
+        """obsSetSelection paths (one per cluster ID) so the whole clustering is preselected.
+
+        Tries each candidate clustering in order and preselects the first one actually present in obs,
+        so we never leave the initial selection to Vitessce's default (the alphabetically-first set).
+        A group-level path alone does not preselect the members, so enumerate them, reading the cluster
+        labels across the anndata categorical encodings. Returns None when none are present.
+        """
+        if z is None or "obs" not in z:
+            return None
+        obs = z["obs"]
+        for cell_set in candidate_cell_sets:
+            if cell_set not in obs_set_names or cell_set not in obs:
+                continue
+            node = obs[cell_set]
+            if not hasattr(node, "shape"):  # categorical stored as a group with a `categories` array
+                members = node["categories"][:]
+            elif "categories" in node.attrs:  # codes array; attrs hold the labels or name a sibling array
+                cats = node.attrs["categories"]
+                members = obs[cats][:] if isinstance(cats, str) else cats
+            else:  # plain (non-categorical) column: the distinct values are the cluster IDs
+                members = np.unique(node[:])
+            return [[cell_set, str(member)] for member in members]
+        return None
+
+    def _segmentation_channel_names(self):
+        """Nucleus + cell segmentation channel names from the entity's segmentation_metadata (nucleus
+        first), restricted to this image when the metadata identifies it. These are the channels used
+        to segment nuclei/cells, so they're the most useful to surface by default."""
+        seg_meta = (self._entity.get("ingest_metadata") or {}).get("segmentation_metadata") or []
+        matching = [e for e in seg_meta if self._image_name in (e.get("Image") or "")] or seg_meta
+        names = []
+        for entry in matching:
+            names += list(entry.get("NucleusSegmentationChannels") or [])
+            names += list(entry.get("CellSegmentationChannels") or [])
+        return list(dict.fromkeys(names))  # dedupe, preserving order
+
+    def _select_image_channels(self, image_metadata, num_channels):
+        """Channel indices to surface by default: the identified segmentation channels first (mapped
+        from name to index via the OME-TIFF channel names), then the remaining channels in order.
+        Falls back to the leading channels when channel names/segmentation metadata aren't available."""
+        size_c = (image_metadata or {}).get("SizeC") or 1
+        channel_names = (image_metadata or {}).get("ChannelNames") or []
+        name_to_index = {name: i for i, name in enumerate(channel_names) if name is not None}
+        seg_indices = [name_to_index[n] for n in self._segmentation_channel_names() if n in name_to_index]
+        remaining = [i for i in range(size_c) if i not in seg_indices]
+        return (seg_indices + remaining)[:num_channels]
+
+    def _build_description(self, image_metadata, n_obs):
+        """Summary text for the description view: OME-TIFF header info plus the cell count."""
+        lines = [self._image_name]
+        if image_metadata:
+            size_x, size_y = image_metadata.get("SizeX"), image_metadata.get("SizeY")
+            if size_x and size_y:
+                lines.append(f"Image: {size_x} × {size_y} px, {image_metadata.get('SizeC', 1)} channels")
+            physical_x, unit = image_metadata.get("PhysicalSizeX"), image_metadata.get("PhysicalSizeUnitX")
+            if physical_x and unit:
+                lines.append(f"Pixel size: {physical_x} {unit}")
+        if n_obs:
+            lines.append(f"{n_obs:,} cells")
+        return ". ".join(lines)
+
+    def _get_n_obs(self, z):
+        """Number of cells in the SPRM AnnData store (for the heatmap size gate)."""
+        if z is None:
+            return 0
+        if "obs" in z and "_index" in z["obs"]:
+            return z["obs"]["_index"].shape[0]
+        if "obsm" in z and "xy" in z["obsm"]:
+            return z["obsm"]["xy"].shape[0]
+        return 0  # pragma: no cover
 
     def get_conf_cells(self, marker=None):
         vc, dataset = self._create_vitessce_config(name=self._image_name, dataset_name="SPRM")
@@ -194,47 +294,116 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             self._require_zarr_store(zarr_path)
         adata_url = self._build_assets_url(zarr_path, use_token=False)
 
-        additional_cluster_names = list(self.zarr_store().get("uns/cluster_columns", []))
-
+        z = self.zarr_store()
+        # zarr v3 iterates an array into 0-d ndarrays; read values explicitly as a list of strings.
+        # z is None if the store failed to open; fall back to the default factors so the config still
+        # builds (the _get_n_obs / _embedding_preference / _prioritized_cell_set_selection calls below
+        # already guard against None).
+        additional_cluster_names = (
+            z["uns/cluster_columns"][:].tolist() if z is not None and "uns/cluster_columns" in z else []
+        )
         obs_set_names = sorted(set(additional_cluster_names + DEFAULT_SPRM_ANNDATA_FACTORS))
         obs_set_paths = [f"obs/{key}" for key in obs_set_names]
+        n_obs = self._get_n_obs(z)
+        embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
+        # Prefer the embedding's matching clustering, then the default factors (tSNE-first) so a
+        # sensible clustering is always preselected instead of Vitessce's alphabetically-first default.
+        candidate_cell_sets = [prioritized_cell_set, *DEFAULT_SPRM_ANNDATA_FACTORS]
+        prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets)
 
         anndata_wrapper = AnnDataWrapper(
             adata_url=adata_url,
             is_zip=self._is_zarr_zip,
             obs_feature_matrix_path="X",
-            obs_embedding_paths=["obsm/tsne"],
-            obs_embedding_names=["t-SNE"],
+            obs_embedding_paths=[embedding_path],
+            obs_embedding_names=[embedding_name],
             obs_set_names=obs_set_names,
             obs_set_paths=obs_set_paths,
-            obs_locations_path="obsm/xy",
+            # Cells are shown via the (image-aligned) segmentation mask. obsm/xy centroids live in a
+            # different coordinate space than the registered image and render misaligned, so omit them.
+            coordination_values={"obsType": "cell"},
             request_init=self._get_request_init(),
         )
         dataset = dataset.add_object(anndata_wrapper)
+
+        # Beta spatial/layerController views read the new image-coordination model, so the
+        # expression image and the segmentation bitmask are separate layers (not MultiImageWrapper).
         found_image_file = self._check_sprm_image(self._get_full_image_path())
-        image_wrapper = self._get_ometiff_image_wrapper(found_image_file, self.image_pyramid_regex)
+        img_url, offsets_url, _ = self._get_img_and_offset_url(found_image_file, self.image_pyramid_regex)
+        image_metadata = get_ome_tiff_metadata(img_url)
+        dataset = dataset.add_object(
+            ImageOmeTiffWrapper(
+                img_url=img_url,
+                offsets_url=offsets_url,
+                coordination_values={"fileUid": "image"},
+            )
+        )
         found_bitmask_file = self._check_sprm_image(self._get_bitmask_image_path())
-        bitmask_wrapper = self._get_ometiff_mask_wrapper(found_bitmask_file)
-        dataset = dataset.add_object(MultiImageWrapper([image_wrapper, bitmask_wrapper]))
-        vc = self._setup_view_config_raster_cellsets_expression_segmentation(vc, dataset, marker)
+        bitmask_url, bitmask_offsets_url, _ = self._get_img_and_offset_url(found_bitmask_file, self.image_pyramid_regex)
+        # The expression image and mask are often stored at different physical pixel sizes (and units);
+        # scale the segmentation into the image's coordinate space so the cells overlay it (the legacy
+        # raster config aligned them implicitly). Handles unit conversion and a unitless/absent mask
+        # physical size, degrading to no scaling only when neither OME-TIFF exposes physical sizes.
+        segmentation_scale = get_segmentation_alignment_scale(image_metadata, get_ome_tiff_metadata(bitmask_url))
+        dataset = dataset.add_object(
+            ObsSegmentationsOmeTiffWrapper(
+                img_url=bitmask_url,
+                offsets_url=bitmask_offsets_url,
+                coordinate_transformations=[{"type": "scale", "scale": segmentation_scale}],
+                coordination_values={"fileUid": "segmentation-mask"},
+            )
+        )
+
+        num_image_channels = min(MAX_IMAGE_CHANNELS, (image_metadata or {}).get("SizeC") or 1)
+        # Surface the segmentation (nucleus/cell) channels first, then fill with the remaining channels.
+        channel_indices = self._select_image_channels(image_metadata, num_image_channels)
+        vc = self._setup_view_config_raster_cellsets_expression_segmentation(
+            vc,
+            dataset,
+            marker,
+            n_obs=n_obs,
+            channel_indices=channel_indices,
+            embedding_name=embedding_name,
+            prioritized_selection=prioritized_selection,
+            description_text=self._build_description(image_metadata, n_obs),
+        )
         return get_conf_cells(vc)
 
-    def _setup_view_config_raster_cellsets_expression_segmentation(self, vc, dataset, marker):
+    def _setup_view_config_raster_cellsets_expression_segmentation(
+        self,
+        vc,
+        dataset,
+        marker,
+        n_obs=0,
+        channel_indices=(0,),
+        embedding_name="t-SNE",
+        prioritized_selection=None,
+        description_text="",
+    ):
+        # Hide the heatmap for very large datasets (same gate as the AnnData builders) and let the
+        # spatial/scatterplot views grow into the freed vertical space.
+        include_heatmap = not self._minimal and n_obs <= MAX_OBS_FOR_HEATMAP
+        views_h = 8 if include_heatmap else 12
+
         description = vc.add_view(cm.DESCRIPTION, dataset=dataset, x=0, y=8, w=3, h=4)
-        layer_controller = vc.add_view(cm.LAYER_CONTROLLER, dataset=dataset, x=0, y=0, w=3, h=8)
-
-        spatial = vc.add_view(cm.SPATIAL, dataset=dataset, x=3, y=0, w=4, h=8)
-        scatterplot = vc.add_view(cm.SCATTERPLOT, dataset=dataset, mapping="t-SNE", x=7, y=0, w=3, h=8)
+        if description_text:
+            description.set_props(description=description_text)
+        layer_controller = vc.add_view("layerControllerBeta", dataset=dataset, x=0, y=0, w=3, h=8)
+        spatial = vc.add_view("spatialBeta", dataset=dataset, x=3, y=0, w=4, h=views_h)
+        scatterplot = vc.add_view(cm.SCATTERPLOT, dataset=dataset, mapping=embedding_name, x=7, y=0, w=3, h=views_h)
         cell_sets = vc.add_view(cm.OBS_SETS, dataset=dataset, x=10, y=5, w=2, h=7)
-
         gene_list = vc.add_view(cm.FEATURE_LIST, dataset=dataset, x=10, y=0, w=2, h=5).set_props(
             variablesLabelOverride="antigen"
         )
-        heatmap = vc.add_view(cm.HEATMAP, dataset=dataset, x=3, y=8, w=7, h=4).set_props(
-            variablesLabelOverride="antigen", transpose=True
-        )
 
-        views = [description, layer_controller, spatial, cell_sets, gene_list, scatterplot, heatmap]
+        views = [description, layer_controller, spatial, scatterplot, cell_sets, gene_list]
+        if include_heatmap:
+            heatmap = vc.add_view(cm.HEATMAP, dataset=dataset, x=3, y=8, w=7, h=4).set_props(
+                variablesLabelOverride="antigen", transpose=True
+            )
+            views.append(heatmap)
+
+        vc.link_views(views, [CoordinationType.OBS_TYPE], ["cell"])
 
         if marker:
             vc.link_views(
@@ -242,6 +411,84 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                 [CoordinationType.FEATURE_SELECTION, CoordinationType.OBS_COLOR_ENCODING],
                 [[marker], "geneSelection"],
             )
+        else:
+            # Color cells (scatterplot + segmentation) by the selected cell set.
+            [obs_color_encoding] = vc.add_coordination(CoordinationType.OBS_COLOR_ENCODING)
+            obs_color_encoding.set_value("cellSetSelection")
+            for view in (spatial, scatterplot, cell_sets):
+                view.use_coordination(obs_color_encoding)
+            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE),
+            # enumerating each cluster ID so the whole clustering is selected initially.
+            if prioritized_selection:
+                [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
+                obs_set_selection.set_value(prioritized_selection)
+                for view in (spatial, scatterplot, cell_sets):
+                    view.use_coordination(obs_set_selection)
+
+        # Wire the image and segmentation layers into the beta views. The beta spatial model does not
+        # auto-discover channels, so each channel is listed explicitly (an empty/partial channel list
+        # renders a null channel and crashes the view). channel_indices leads with the segmentation
+        # (nucleus/cell) channels; colors are assigned by display position, and the layer controller
+        # lets users toggle the rest.
+        image_channels = [
+            {
+                "spatialTargetC": channel,
+                "spatialChannelColor": IMAGE_CHANNEL_COLORS[position],
+                "spatialChannelVisible": True,
+                "spatialChannelOpacity": 1.0,
+            }
+            for position, channel in enumerate(channel_indices)
+        ]
+        vc.link_views_by_dict(
+            [spatial, layer_controller],
+            {
+                "spatialTargetZ": 0,
+                "spatialTargetT": 0,
+                "imageLayer": CL(
+                    [
+                        {
+                            "fileUid": "image",
+                            "spatialLayerVisible": True,
+                            "spatialLayerOpacity": 1.0,
+                            "photometricInterpretation": "BlackIsZero",
+                            "imageChannel": CL(image_channels),
+                        }
+                    ]
+                ),
+            },
+            meta=True,
+            scope_prefix=get_initial_coordination_scope_prefix(self._uuid, "image"),
+        )
+        vc.link_views_by_dict(
+            [spatial, layer_controller],
+            {
+                "segmentationLayer": CL(
+                    [
+                        {
+                            "fileUid": "segmentation-mask",
+                            "spatialLayerVisible": True,
+                            "spatialLayerOpacity": 1.0,
+                            "segmentationChannel": CL(
+                                [
+                                    {
+                                        # ponytail: channel 0 assumed to be the cell mask; obsType "cell"
+                                        # joins it to the AnnData cells so it colors by the selected cell set.
+                                        "spatialTargetC": 0,
+                                        "obsType": "cell",
+                                        "spatialChannelOpacity": 1.0,
+                                        "spatialChannelVisible": True,
+                                        "obsColorEncoding": "cellSetSelection",
+                                        "spatialSegmentationFilled": True,
+                                    }
+                                ]
+                            ),
+                        }
+                    ]
+                )
+            },
+            meta=True,
+            scope_prefix=get_initial_coordination_scope_prefix(self._uuid, "obsSegmentations"),
+        )
 
         return vc
 

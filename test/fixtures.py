@@ -229,7 +229,6 @@ def populate_anndata_zarr(
     """
     try:
         import numpy as np
-        import zarr
     except ImportError:  # pragma: no cover
         return  # Skip for thin install
 
@@ -239,42 +238,43 @@ def populate_anndata_zarr(
 
     # Create obs group
     obs = zarr_group.create_group("obs")
-    obs["_index"] = zarr.array(obs_index)
+    obs["_index"] = np.asarray(obs_index)
 
     # Add cluster columns
     if cluster_columns:
         for col in cluster_columns:
-            obs[col] = zarr.array(np.random.randint(0, 5, size=obs_count))
+            obs[col] = np.asarray(np.random.randint(0, 5, size=obs_count))
 
     # Add annotations
     if is_annotated:
-        obs["predicted_label"] = zarr.array([f"celltype_{i % 3}" for i in range(obs_count)])
-        obs["predicted.ASCT.celltype"] = zarr.array([f"asct_type_{i % 3}" for i in range(obs_count)])
-        obs["predicted_CLID"] = zarr.array([f"CL:{1000000 + i % 5}" for i in range(obs_count)])
-        obs["CL_Label"] = zarr.array([f"cl_label_{i % 3}" for i in range(obs_count)])
-        obs["final_level_labels"] = zarr.array([f"final_label_{i % 3}" for i in range(obs_count)])
-        obs["full_hierarchical_labels"] = zarr.array([f"hierarchy_{i % 3}" for i in range(obs_count)])
-        obs["annotation_method"] = zarr.array(["azimuth"] * obs_count)
-        obs["predicted.celltype.l1"] = zarr.array([f"az_l1_{i % 3}" for i in range(obs_count)])
-        obs["predicted.celltype.l2"] = zarr.array([f"az_l2_{i % 3}" for i in range(obs_count)])
+        obs["predicted_label"] = np.asarray([f"celltype_{i % 3}" for i in range(obs_count)])
+        obs["predicted.ASCT.celltype"] = np.asarray([f"asct_type_{i % 3}" for i in range(obs_count)])
+        obs["predicted_CLID"] = np.asarray([f"CL:{1000000 + i % 5}" for i in range(obs_count)])
+        obs["CL_Label"] = np.asarray([f"cl_label_{i % 3}" for i in range(obs_count)])
+        obs["final_level_labels"] = np.asarray([f"final_label_{i % 3}" for i in range(obs_count)])
+        obs["full_hierarchical_labels"] = np.asarray([f"hierarchy_{i % 3}" for i in range(obs_count)])
+        obs["annotation_method"] = np.asarray(["azimuth"] * obs_count)
+        obs["predicted.celltype.l1"] = np.asarray([f"az_l1_{i % 3}" for i in range(obs_count)])
+        obs["predicted.celltype.l2"] = np.asarray([f"az_l2_{i % 3}" for i in range(obs_count)])
 
         # Add annotation metadata
         uns = zarr_group.create_group("uns", overwrite=True)
         ann_meta = uns.create_group("annotation_metadata", overwrite=True)
-        ann_meta["is_annotated"] = zarr.array(True)
+        is_annotated_arr = ann_meta.create_array("is_annotated", shape=(), dtype=bool)
+        is_annotated_arr[()] = True
 
     # Create var group
     var = zarr_group.create_group("var")
-    var["_index"] = zarr.array(var_index)
+    var["_index"] = np.asarray(var_index)
 
     # Add embeddings
     if embedding_keys:
         obsm = zarr_group.create_group("obsm")
         for key in embedding_keys:
-            obsm[key] = zarr.array(np.random.rand(obs_count, 2))
+            obsm[key] = np.asarray(np.random.rand(obs_count, 2))
 
     # Add X data
-    zarr_group["X"] = zarr.array(np.random.rand(obs_count, var_count))
+    zarr_group["X"] = np.asarray(np.random.rand(obs_count, var_count))
 
 
 def populate_spatial_zarr(zarr_group, obs_count: int = 100, has_spatial_coords: bool = True, **kwargs) -> None:
@@ -292,7 +292,6 @@ def populate_spatial_zarr(zarr_group, obs_count: int = 100, has_spatial_coords: 
     """
     try:
         import numpy as np
-        import zarr
     except ImportError:  # pragma: no cover
         return
 
@@ -302,7 +301,7 @@ def populate_spatial_zarr(zarr_group, obs_count: int = 100, has_spatial_coords: 
     # Add spatial coordinates
     if has_spatial_coords:
         obsm = zarr_group.require_group("obsm")
-        obsm["spatial"] = zarr.array(np.random.rand(obs_count, 2) * 1000)  # Pixel coordinates
+        obsm["spatial"] = np.asarray(np.random.rand(obs_count, 2) * 1000)  # Pixel coordinates
 
 
 def populate_multiome_zarr(zarr_group, obs_count: int = 100, modalities: list[str] | None = None) -> None:
@@ -319,7 +318,6 @@ def populate_multiome_zarr(zarr_group, obs_count: int = 100, modalities: list[st
     """
     try:
         import numpy as np
-        import zarr
     except ImportError:  # pragma: no cover
         return
 
@@ -333,13 +331,13 @@ def populate_multiome_zarr(zarr_group, obs_count: int = 100, modalities: list[st
 
         # Add basic structure for each modality
         obs = mod_group.create_group("obs")
-        obs["_index"] = zarr.array([f"cell_{i}" for i in range(obs_count)])
+        obs["_index"] = np.asarray([f"cell_{i}" for i in range(obs_count)])
 
         var = mod_group.create_group("var")
-        var["_index"] = zarr.array([f"feature_{i}" for i in range(50)])
+        var["_index"] = np.asarray([f"feature_{i}" for i in range(50)])
 
         # Add cluster columns specific to modality
-        obs[f"leiden_{modality}"] = zarr.array(np.random.randint(0, 5, size=obs_count))
+        obs[f"leiden_{modality}"] = np.asarray(np.random.randint(0, 5, size=obs_count))
 
 
 # Legacy compatibility functions

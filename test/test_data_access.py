@@ -108,7 +108,9 @@ class TestZarrStoreAccessor:
             # Verify read_zip_zarr was called with correct arguments
             assert mock_read_zip.called
             call_args = mock_read_zip.call_args
-            assert "?token=abc" in call_args[0][0]  # URL should have token
+            # No ?token= in the URL: server-side auth goes through request_init headers, and keeping
+            # "?" out of the URL avoids fsspec treating it as a glob character.
+            assert "?token=" not in call_args[0][0]
             assert call_args[0][1] == {"headers": {"Authorization": "Bearer token"}}  # request_init
             assert result is mock_store
 
@@ -128,16 +130,16 @@ class TestZarrStoreAccessor:
         # Test that custom path is used
         with (
             patch("portal_visualization.data_access._FULL_DEPS_AVAILABLE", True),
-            patch("portal_visualization.data_access.zarr") as mock_zarr,
+            patch("portal_visualization.data_access.read_zarr") as mock_read_zarr,
         ):
             mock_store = Mock()
-            mock_zarr.open.return_value = mock_store
+            mock_read_zarr.return_value = mock_store
 
             accessor.open_store(is_zip=False, zarr_path="custom/path.zarr")
 
-            # Verify zarr.open was called with custom path
-            assert mock_zarr.open.called
-            call_args = mock_zarr.open.call_args
+            # Verify read_zarr was called with custom path
+            assert mock_read_zarr.called
+            call_args = mock_read_zarr.call_args
             assert "custom/path.zarr" in call_args[0][0]
 
 

@@ -259,6 +259,10 @@ class ViewConfBuilder(ABC):
         This is needed for non-public zarr stores because the client forms URLs for zarr chunks,
         not the above _build_assets_url function.
 
+        This is the browser-facing header set. Server-side requests made while building the config
+        additionally wrap it with ``with_config_builder_user_agent`` so the back-end doesn't
+        throttle them as scraping; the browser can't override User-Agent anyway.
+
         >>> builder = _DocTestBuilder(
         ...   entity={"uuid": "uuid", "status": "QA"},
         ...   groups_token='groups_token',

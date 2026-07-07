@@ -19,7 +19,7 @@ from ..paths import (
     SEGMENTATION_SUPPORT_IMAGE_SUBDIR,
     SEGMENTATION_ZARR_STORES,
 )
-from ..utils import get_conf_cells, get_image_metadata, get_image_scale, get_matches
+from ..utils import get_conf_cells, get_image_metadata, get_image_scale, get_matches, with_config_builder_user_agent
 from .base_builders import ViewConfBuilder
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
     def read_metadata_from_url(self):  # pragma: no cover
         mask_names = []
         url = f"{self.zarr_store_url()}/metadata.json"
-        request_init = self._get_request_init() or {}
+        request_init = with_config_builder_user_agent(self._get_request_init())
         response = get(url, **request_init)
         if response.status_code == 200:
             data = response.json()
