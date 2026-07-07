@@ -1577,6 +1577,41 @@ def test_sprm_builds_when_zarr_store_unavailable(mocker):
 
 
 @pytest.mark.requires_full
+def test_safe_http_filesystem_listing_error_handling():
+    """_SafeHTTPFileSystem returns [] for forbidden/absent directory listings (both _ls and _find,
+    used by zarr's list_dir / list / list_prefix) and re-raises other errors so real failures aren't
+    hidden."""
+    import asyncio
+    from unittest.mock import patch
+
+    from fsspec.implementations.http import HTTPFileSystem
+
+    from src.portal_visualization.utils import _SafeHTTPFileSystem
+
+    fs = _SafeHTTPFileSystem(asynchronous=True)
+
+    class _HttpError(Exception):
+        def __init__(self, status):
+            self.status = status
+
+    def call(method, exc):
+        async def boom(*a, **k):
+            raise exc
+
+        async def go():
+            with patch.object(HTTPFileSystem, method, boom):
+                return await getattr(fs, method)("http://host/dir")
+
+        return asyncio.run(go())
+
+    for method in ("_ls", "_find"):
+        assert call(method, _HttpError(403)) == []  # forbidden directory listing -> empty
+        assert call(method, FileNotFoundError()) == []  # absent -> empty
+        with pytest.raises(_HttpError):
+            call(method, _HttpError(500))  # any other error is re-raised
+
+
+@pytest.mark.requires_full
 def test_safe_zip_filesystem_translates_missing_key(tmp_path):
     """Absent zip members must surface as FileNotFoundError so zarr v3 treats them as None."""
     import zipfile

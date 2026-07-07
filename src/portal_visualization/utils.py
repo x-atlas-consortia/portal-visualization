@@ -27,10 +27,11 @@ def with_config_builder_user_agent(request_init):
     whitelist. Server-side only: the browser sets its own User-Agent and can't override it, so
     this is deliberately kept out of the browser-facing ``_get_request_init``.
 
-    >>> with_config_builder_user_agent(None)
-    {'headers': {'User-Agent': 'hubmap-portal-visualization'}}
-    >>> with_config_builder_user_agent({'headers': {'Authorization': 'Bearer x'}})
-    {'headers': {'User-Agent': 'hubmap-portal-visualization', 'Authorization': 'Bearer x'}}
+    >>> with_config_builder_user_agent(None) == {'headers': {'User-Agent': PORTAL_VIS_USER_AGENT}}
+    True
+    >>> with_config_builder_user_agent({'headers': {'Authorization': 'Bearer x'}}) == {
+    ...     'headers': {'User-Agent': PORTAL_VIS_USER_AGENT, 'Authorization': 'Bearer x'}}
+    True
     """
     request_init = dict(request_init or {})
     request_init["headers"] = {"User-Agent": PORTAL_VIS_USER_AGENT, **request_init.get("headers", {})}
@@ -493,7 +494,7 @@ class _SafeHTTPFileSystem(HTTPFileSystem):
 
 def read_zarr(zarr_url, request_init):
     """Open a (non-zip) zarr store over HTTP, tolerating assets servers that forbid directory
-    listing. Falls back to a plain ``zarr.open`` for non-HTTP URLs (e.g. local paths in tests).
+    listing. The builders only ever pass an assets (https) URL here.
 
     Requires zarr v3 (like ``read_zip_zarr``); the runtime environments are expected to install
     the pinned vitessce/zarr v3 dependencies.
@@ -505,9 +506,6 @@ def read_zarr(zarr_url, request_init):
     Returns:
         zarr.Group: Opened Zarr store.
     """
-    client_kwargs = with_config_builder_user_agent(request_init)
-    if not str(zarr_url).startswith("http"):
-        return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": client_kwargs})
-    fs = _SafeHTTPFileSystem(asynchronous=True, client_kwargs=client_kwargs)
+    fs = _SafeHTTPFileSystem(asynchronous=True, client_kwargs=with_config_builder_user_agent(request_init))
     store = zarr.storage.FsspecStore(fs, path=zarr_url, read_only=True)
     return zarr.open_group(store, mode="r", use_consolidated=False)
