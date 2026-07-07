@@ -1078,6 +1078,33 @@ def generate_geomx_test_cases():
         )
     )
 
+    # Test case 3: newer layout — segmentation pyramid emitted under lab_processed/images/
+    # alongside the base image (regression for "missing segmentation image pyramid files").
+    test_cases.append(
+        (
+            "GeoMxImagePyramidViewConfBuilder/generated-fake-lab-processed-seg",
+            make_entity(
+                uuid="5a82f8bef364ca3e1fadbd661b3e68cb",
+                status="QA",
+                soft_assaytype="",
+                data_types=["Histology"],
+                hints=["geomx", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/SN_0179_Slide1.segmentations.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/lab_processed/images/SN_0179_Slide1.ome.tif"},
+                    {"rel_path": "output_offsets/lab_processed/images/SN_0179_Slide1.segmentations.offsets.json"},
+                    {"rel_path": "output_offsets/lab_processed/images/SN_0179_Slide1.offsets.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/SN_0179_Slide1.segmentations.metadata.json"},
+                    {"rel_path": "image_metadata/lab_processed/images/SN_0179_Slide1.metadata.json"},
+                    {"rel_path": "output_ome_segments/SN_0179_Slide1.obsSegmentations.json"},
+                    {"rel_path": "output_ome_segments/SN_0179_Slide1.roi.zarr/.zgroup"},
+                    {"rel_path": "output_ome_segments/SN_0179_Slide1.aoi.zarr/.zgroup"},
+                ],
+                immediate_ancestors=[{"data_types": ["Histology"]}],
+            ),
+        )
+    )
+
     return test_cases
 
 

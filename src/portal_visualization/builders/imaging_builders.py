@@ -152,7 +152,12 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
         found_images = get_found_images(self.seg_image_pyramid_regex, file_paths_found)
 
+        # The segmentation pyramid historically lives outside the base-image dirs, so exclude those.
+        # Newer pipelines emit it under ``lab_processed/images/`` next to the base image, where that
+        # exclusion leaves nothing — fall back to the ``*.segmentations.*`` suffix in that case.
         filtered_images = [img for img in found_images if not any(subdir in img for subdir in base_image_dirs)]
+        if not filtered_images:
+            filtered_images = [img for img in found_images if ".segmentations." in img]
 
         if not filtered_images:
             raise FileNotFoundError(f"Dataset {self._uuid} is missing segmentation image pyramid files")
