@@ -1461,6 +1461,8 @@ for test_id, entity in programmatic_test_cases:
 
 # A published dataset yields request_init=None; a QA one yields an Authorization header. The UA
 # must be added in both cases without dropping any existing header.
+# requires_full: with_config_builder_user_agent lives in utils, which imports the full-only deps.
+@pytest.mark.requires_full
 @pytest.mark.parametrize("request_init", [None, {}, {"headers": {"Authorization": "Bearer x"}}])
 def test_config_builder_user_agent_evades_scraping_filter(request_init):
     """Server-side config-builder requests must carry a UA the back-end won't throttle."""
