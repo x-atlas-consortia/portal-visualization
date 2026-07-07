@@ -9,6 +9,7 @@ import nbformat
 import requests
 import zarr
 from fsspec.implementations.asyn_wrapper import AsyncFileSystemWrapper
+from fsspec.implementations.http import HTTPFileSystem
 from fsspec.implementations.zip import ZipFileSystem
 from vitessce import VitessceConfig
 
@@ -449,4 +450,61 @@ def read_zip_zarr(zarr_url, request_init):
     )
     # zarr v3 needs an async-capable store; wrap the sync zip filesystem.
     store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs, asynchronous=True), read_only=True)
+    return zarr.open_group(store, mode="r", use_consolidated=False)
+
+
+def _listing_forbidden_or_missing(exc):
+    """True for the responses the assets server gives when a directory can't be listed."""
+    # aiohttp raises ClientResponseError with a numeric .status; fsspec may wrap as FileNotFoundError.
+    return getattr(exc, "status", None) in (403, 404) or isinstance(exc, (FileNotFoundError, PermissionError))
+
+
+class _SafeHTTPFileSystem(HTTPFileSystem):
+    """HTTPFileSystem that treats a forbidden/absent directory listing as empty.
+
+    The HuBMAP assets server serves individual files but returns 403 for directory GETs (no
+    listing). zarr v3 enumerates group members by listing the directory (zarr v2 read keys by
+    path and never listed), so a plain open crashes on published stores with a 403 on e.g.
+    ``.../obs/``. Returning an empty listing lets member enumeration degrade to "nothing found"
+    while direct key reads -- how anndata arrays/attrs are actually accessed -- keep working.
+    """
+
+    async def _ls(self, url, detail=True, **kwargs):
+        # zarr's list_dir() -> fs._ls(); used for group member enumeration.
+        try:
+            return await super()._ls(url, detail=detail, **kwargs)
+        except Exception as exc:
+            if _listing_forbidden_or_missing(exc):
+                return []
+            raise
+
+    async def _find(self, path, *args, **kwargs):
+        # zarr's list() / list_prefix() -> fs._find().
+        try:
+            return await super()._find(path, *args, **kwargs)
+        except Exception as exc:
+            if _listing_forbidden_or_missing(exc):
+                return []
+            raise
+
+
+def read_zarr(zarr_url, request_init):
+    """Open a (non-zip) zarr store over HTTP, tolerating assets servers that forbid directory
+    listing. Falls back to a plain ``zarr.open`` for non-HTTP URLs (e.g. local paths in tests).
+
+    Requires zarr v3 (like ``read_zip_zarr``); the runtime environments are expected to install
+    the pinned vitessce/zarr v3 dependencies.
+
+    Parameters:
+        zarr_url (str): URL to the .zarr store.
+        request_init (dict): Client kwargs for request customization.
+
+    Returns:
+        zarr.Group: Opened Zarr store.
+    """
+    client_kwargs = with_config_builder_user_agent(request_init)
+    if not str(zarr_url).startswith("http"):
+        return zarr.open(zarr_url, mode="r", storage_options={"client_kwargs": client_kwargs})
+    fs = _SafeHTTPFileSystem(asynchronous=True, client_kwargs=client_kwargs)
+    store = zarr.storage.FsspecStore(fs, path=zarr_url, read_only=True)
     return zarr.open_group(store, mode="r", use_consolidated=False)

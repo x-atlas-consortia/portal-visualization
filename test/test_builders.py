@@ -370,6 +370,8 @@ def mock_zarr_store(entity_path, mocker, obs_count):
     mocker.patch("zarr.open", return_value=z)
     if is_zip_entity(entity_path):
         mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=z)
+    else:
+        mocker.patch("src.portal_visualization.data_access.read_zarr", return_value=z)
 
 
 # Programmatic test configurations to replace JSON fixtures
@@ -1491,6 +1493,54 @@ def test_read_zip_zarr_opens_store(mocker):
 
     assert result == mock_zarr_obj
     open_group.assert_called_once_with(mock_store, mode="r", use_consolidated=False)
+
+
+@pytest.mark.requires_full
+def test_read_zarr_tolerates_forbidden_directory_listing():
+    """The HuBMAP assets server serves files but returns 403 for directory GETs. zarr v3 enumerates
+    group members by listing the directory (zarr v2 read keys by path), so a plain open crashes with
+    a 403 on e.g. `.../obs/`. read_zarr must keep direct key reads working and degrade group
+    enumeration to empty instead of raising."""
+    import http.server
+    import socketserver
+    import tempfile
+    import threading
+
+    from src.portal_visualization.utils import read_zarr
+
+    d = tempfile.mkdtemp()
+    root = zarr.open_group(d, mode="w", zarr_format=2)
+    obs = root.create_group("obs")
+    obs["_index"] = np.array(["c0", "c1", "c2"])
+    obs["clust"] = np.array([0, 1, 0])
+    del root, obs
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=d, **k)
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path.endswith("/"):  # assets server forbids directory listing
+                self.send_error(403, "Forbidden")
+                return
+            super().do_GET()
+
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        z = read_zarr(f"http://127.0.0.1:{httpd.server_address[1]}", {})
+        # Direct key reads and membership checks still work over HTTP.
+        assert z["obs"]["_index"].shape[0] == 3
+        assert "clust" in z["obs"]
+        assert "missing" not in z["obs"]
+        # Group enumeration would 403 on the directory; the safe filesystem degrades it to empty
+        # rather than crashing the whole config build.
+        assert list(z["obs"]) == []
+    finally:
+        httpd.shutdown()
 
 
 @pytest.mark.requires_full
