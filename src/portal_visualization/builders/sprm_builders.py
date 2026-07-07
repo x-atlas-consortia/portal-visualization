@@ -210,25 +210,53 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         return TSNE_EMBEDDING
 
     @staticmethod
-    def _prioritized_cell_set_selection(z, obs_set_names, cell_set):
+    def _prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets):
         """obsSetSelection paths (one per cluster ID) so the whole clustering is preselected.
 
-        A group-level path alone does not preselect the members, so enumerate them (mirroring the
-        multiome builder's cell-set preselection). Reads the cluster labels across the anndata
-        categorical encodings. Returns None when the clustering isn't present.
+        Tries each candidate clustering in order and preselects the first one actually present in obs,
+        so we never leave the initial selection to Vitessce's default (the alphabetically-first set).
+        A group-level path alone does not preselect the members, so enumerate them, reading the cluster
+        labels across the anndata categorical encodings. Returns None when none are present.
         """
-        if z is None or cell_set not in obs_set_names or "obs" not in z or cell_set not in z["obs"]:
+        if z is None or "obs" not in z:
             return None
         obs = z["obs"]
-        node = obs[cell_set]
-        if not hasattr(node, "shape"):  # categorical stored as a group with a `categories` array
-            members = node["categories"][:]
-        elif "categories" in node.attrs:  # codes array; attrs hold the labels or name a sibling array
-            cats = node.attrs["categories"]
-            members = obs[cats][:] if isinstance(cats, str) else cats
-        else:  # plain (non-categorical) column: the distinct values are the cluster IDs
-            members = np.unique(node[:])
-        return [[cell_set, str(member)] for member in members]
+        for cell_set in candidate_cell_sets:
+            if cell_set not in obs_set_names or cell_set not in obs:
+                continue
+            node = obs[cell_set]
+            if not hasattr(node, "shape"):  # categorical stored as a group with a `categories` array
+                members = node["categories"][:]
+            elif "categories" in node.attrs:  # codes array; attrs hold the labels or name a sibling array
+                cats = node.attrs["categories"]
+                members = obs[cats][:] if isinstance(cats, str) else cats
+            else:  # plain (non-categorical) column: the distinct values are the cluster IDs
+                members = np.unique(node[:])
+            return [[cell_set, str(member)] for member in members]
+        return None
+
+    def _segmentation_channel_names(self):
+        """Nucleus + cell segmentation channel names from the entity's segmentation_metadata (nucleus
+        first), restricted to this image when the metadata identifies it. These are the channels used
+        to segment nuclei/cells, so they're the most useful to surface by default."""
+        seg_meta = (self._entity.get("ingest_metadata") or {}).get("segmentation_metadata") or []
+        matching = [e for e in seg_meta if self._image_name in (e.get("Image") or "")] or seg_meta
+        names = []
+        for entry in matching:
+            names += list(entry.get("NucleusSegmentationChannels") or [])
+            names += list(entry.get("CellSegmentationChannels") or [])
+        return list(dict.fromkeys(names))  # dedupe, preserving order
+
+    def _select_image_channels(self, image_metadata, num_channels):
+        """Channel indices to surface by default: the identified segmentation channels first (mapped
+        from name to index via the OME-TIFF channel names), then the remaining channels in order.
+        Falls back to the leading channels when channel names/segmentation metadata aren't available."""
+        size_c = (image_metadata or {}).get("SizeC") or 1
+        channel_names = (image_metadata or {}).get("ChannelNames") or []
+        name_to_index = {name: i for i, name in enumerate(channel_names) if name is not None}
+        seg_indices = [name_to_index[n] for n in self._segmentation_channel_names() if n in name_to_index]
+        remaining = [i for i in range(size_c) if i not in seg_indices]
+        return (seg_indices + remaining)[:num_channels]
 
     def _build_description(self, image_metadata, n_obs):
         """Summary text for the description view: OME-TIFF header info plus the cell count."""
@@ -268,12 +296,20 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
         z = self.zarr_store()
         # zarr v3 iterates an array into 0-d ndarrays; read values explicitly as a list of strings.
-        additional_cluster_names = z["uns/cluster_columns"][:].tolist() if "uns/cluster_columns" in z else []
+        # z is None if the store failed to open; fall back to the default factors so the config still
+        # builds (the _get_n_obs / _embedding_preference / _prioritized_cell_set_selection calls below
+        # already guard against None).
+        additional_cluster_names = (
+            z["uns/cluster_columns"][:].tolist() if z is not None and "uns/cluster_columns" in z else []
+        )
         obs_set_names = sorted(set(additional_cluster_names + DEFAULT_SPRM_ANNDATA_FACTORS))
         obs_set_paths = [f"obs/{key}" for key in obs_set_names]
         n_obs = self._get_n_obs(z)
         embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
-        prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, prioritized_cell_set)
+        # Prefer the embedding's matching clustering, then the default factors (tSNE-first) so a
+        # sensible clustering is always preselected instead of Vitessce's alphabetically-first default.
+        candidate_cell_sets = [prioritized_cell_set, *DEFAULT_SPRM_ANNDATA_FACTORS]
+        prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets)
 
         anndata_wrapper = AnnDataWrapper(
             adata_url=adata_url,
@@ -319,12 +355,14 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         )
 
         num_image_channels = min(MAX_IMAGE_CHANNELS, (image_metadata or {}).get("SizeC") or 1)
+        # Surface the segmentation (nucleus/cell) channels first, then fill with the remaining channels.
+        channel_indices = self._select_image_channels(image_metadata, num_image_channels)
         vc = self._setup_view_config_raster_cellsets_expression_segmentation(
             vc,
             dataset,
             marker,
             n_obs=n_obs,
-            num_image_channels=num_image_channels,
+            channel_indices=channel_indices,
             embedding_name=embedding_name,
             prioritized_selection=prioritized_selection,
             description_text=self._build_description(image_metadata, n_obs),
@@ -337,7 +375,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         dataset,
         marker,
         n_obs=0,
-        num_image_channels=1,
+        channel_indices=(0,),
         embedding_name="t-SNE",
         prioritized_selection=None,
         description_text="",
@@ -389,16 +427,17 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
         # Wire the image and segmentation layers into the beta views. The beta spatial model does not
         # auto-discover channels, so each channel is listed explicitly (an empty/partial channel list
-        # renders a null channel and crashes the view). Show the first few channels in distinct colors;
-        # the layer controller lets users toggle the rest.
+        # renders a null channel and crashes the view). channel_indices leads with the segmentation
+        # (nucleus/cell) channels; colors are assigned by display position, and the layer controller
+        # lets users toggle the rest.
         image_channels = [
             {
                 "spatialTargetC": channel,
-                "spatialChannelColor": IMAGE_CHANNEL_COLORS[channel],
+                "spatialChannelColor": IMAGE_CHANNEL_COLORS[position],
                 "spatialChannelVisible": True,
                 "spatialChannelOpacity": 1.0,
             }
-            for channel in range(num_image_channels)
+            for position, channel in enumerate(channel_indices)
         ]
         vc.link_views_by_dict(
             [spatial, layer_controller],

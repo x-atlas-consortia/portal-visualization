@@ -107,7 +107,9 @@ class ZarrStoreAccessor:
         path = zarr_path or (self.zip_zarr_path if is_zip else self.zarr_path)
 
         if is_zip:
-            zarr_url = self._url_builder(path, use_token=True)
+            # use_token=False (like the non-zip path): auth goes through request_init headers, and
+            # keeping the ?token= query out of the URL avoids fsspec treating "?" as a glob char.
+            zarr_url = self._url_builder(path, use_token=False)
 
             try:
                 return read_zip_zarr(zarr_url, request_init)

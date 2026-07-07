@@ -1544,6 +1544,37 @@ def test_read_zarr_tolerates_forbidden_directory_listing():
 
 
 @pytest.mark.requires_full
+def test_sprm_builds_when_zarr_store_unavailable(mocker):
+    """If the anndata zarr store fails to open (open_store returns None), the SPRM config must still
+    build from the default factors instead of raising `TypeError: ... 'NoneType' is not iterable`."""
+    from src.portal_visualization.builders.sprm_builders import MultiImageSPRMAnndataViewConfBuilder
+
+    # Store fails to open -> None (e.g. an fsspec error swallowed by open_store).
+    mocker.patch("src.portal_visualization.data_access.read_zarr", return_value=None)
+    mocker.patch("src.portal_visualization.data_access.read_zip_zarr", return_value=None)
+    mocker.patch("src.portal_visualization.builders.sprm_builders.get_ome_tiff_metadata", return_value={"SizeC": 3})
+    mocker.patch("src.portal_visualization.builders.sprm_builders.get_segmentation_alignment_scale", return_value=1.0)
+
+    entity = {
+        "uuid": "sprm-no-store",
+        "status": "Published",
+        "vitessce-hints": ["is_tiled", "is_image", "anndata", "sprm", "spatial"],
+        "files": [
+            {"rel_path": "anndata-zarr/reg001_expr-anndata.zarr/.zgroup"},
+            {"rel_path": "ometiff-pyramids/pipeline_output/expr/reg001_expr.ome.tif"},
+            {"rel_path": "ometiff-pyramids/pipeline_output/mask/reg001_mask.ome.tif"},
+            {"rel_path": "output_offsets/pipeline_output/expr/reg001_expr.offsets.json"},
+            {"rel_path": "output_offsets/pipeline_output/mask/reg001_mask.offsets.json"},
+        ],
+    }
+    builder = MultiImageSPRMAnndataViewConfBuilder(entity, "token", "https://example.com")
+    conf, _cells = builder.get_conf_cells()
+    # Built without raising on z is None, with the default factors as cell sets.
+    assert conf is not None
+    assert conf.get("datasets")
+
+
+@pytest.mark.requires_full
 def test_safe_zip_filesystem_translates_missing_key(tmp_path):
     """Absent zip members must surface as FileNotFoundError so zarr v3 treats them as None."""
     import zipfile
@@ -1926,23 +1957,40 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     obs["_index"] = np.asarray([str(i) for i in range(9)])
     assert builder._get_n_obs(z) == 9
 
-    # _prioritized_cell_set_selection: one path per cluster ID; None when the clustering is absent.
+    # _prioritized_cell_set_selection: one path per cluster ID; None when no candidate is present.
     umap_cell_set = UMAP_EMBEDDING[2]
     obs[umap_cell_set] = np.asarray([0, 1, 2, 1, 0])  # plain (non-categorical) cluster IDs
-    assert builder._prioritized_cell_set_selection(z, [umap_cell_set], umap_cell_set) == [
+    assert builder._prioritized_cell_set_selection(z, [umap_cell_set], [umap_cell_set]) == [
         [umap_cell_set, "0"],
         [umap_cell_set, "1"],
         [umap_cell_set, "2"],
     ]
-    assert builder._prioritized_cell_set_selection(z, [], umap_cell_set) is None  # not in obs_set_names
-    assert builder._prioritized_cell_set_selection(z, ["absent"], "absent") is None  # not in obs
-    assert builder._prioritized_cell_set_selection(None, [umap_cell_set], umap_cell_set) is None
+    assert builder._prioritized_cell_set_selection(z, [], [umap_cell_set]) is None  # not in obs_set_names
+    assert builder._prioritized_cell_set_selection(z, ["absent"], ["absent"]) is None  # not in obs
+    assert builder._prioritized_cell_set_selection(None, [umap_cell_set], [umap_cell_set]) is None
+    # Falls back to the next candidate when the first isn't present (never Vitessce's alphabetical default).
+    assert builder._prioritized_cell_set_selection(z, [umap_cell_set], ["absent", umap_cell_set]) == [
+        [umap_cell_set, "0"],
+        [umap_cell_set, "1"],
+        [umap_cell_set, "2"],
+    ]
     # Categorical encodings: group with a `categories` array, and codes array with attrs["categories"].
     obs.create_group("grp")["categories"] = np.asarray(["A", "B"])
-    assert builder._prioritized_cell_set_selection(z, ["grp"], "grp") == [["grp", "A"], ["grp", "B"]]
+    assert builder._prioritized_cell_set_selection(z, ["grp"], ["grp"]) == [["grp", "A"], ["grp", "B"]]
     obs["codes"] = np.asarray([0, 1, 0])
     obs["codes"].attrs["categories"] = ["X", "Y"]
-    assert builder._prioritized_cell_set_selection(z, ["codes"], "codes") == [["codes", "X"], ["codes", "Y"]]
+    assert builder._prioritized_cell_set_selection(z, ["codes"], ["codes"]) == [["codes", "X"], ["codes", "Y"]]
+
+    # _select_image_channels: segmentation channels (nucleus first) lead, then the rest in order.
+    builder._entity["ingest_metadata"] = {
+        "segmentation_metadata": [
+            {"Image": "r1_expr.ome.tiff", "NucleusSegmentationChannels": ["DAPI"], "CellSegmentationChannels": ["CD45"]}
+        ]
+    }
+    meta = {"SizeC": 5, "ChannelNames": ["CD45", "DAPI", "CD3", "CD8", "Ki67"]}
+    assert builder._select_image_channels(meta, 4) == [1, 0, 2, 3]  # DAPI(1), CD45(0), then remaining
+    # No channel names -> fall back to leading channels.
+    assert builder._select_image_channels({"SizeC": 3}, 2) == [0, 1]
 
     # _build_description: image-name only when no metadata; OME header info + cell count when present.
     assert builder._build_description(None, 0) == "r1_expr"
@@ -1960,7 +2008,7 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
         dataset,
         marker=None,
         n_obs=150_000,
-        num_image_channels=6,
+        channel_indices=list(range(6)),
         embedding_name=UMAP_EMBEDDING[1],
         prioritized_selection=prioritized_selection,
         description_text=description_text,

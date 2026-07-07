@@ -108,7 +108,9 @@ class TestZarrStoreAccessor:
             # Verify read_zip_zarr was called with correct arguments
             assert mock_read_zip.called
             call_args = mock_read_zip.call_args
-            assert "?token=abc" in call_args[0][0]  # URL should have token
+            # No ?token= in the URL: server-side auth goes through request_init headers, and keeping
+            # "?" out of the URL avoids fsspec treating it as a glob character.
+            assert "?token=" not in call_args[0][0]
             assert call_args[0][1] == {"headers": {"Authorization": "Bearer token"}}  # request_init
             assert result is mock_store
 

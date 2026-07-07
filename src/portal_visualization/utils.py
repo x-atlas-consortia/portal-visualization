@@ -190,10 +190,13 @@ def get_ome_tiff_metadata(url):
             return None
         size_x, size_y, size_c = pixels.get("SizeX"), pixels.get("SizeY"), pixels.get("SizeC")
         physical_x, physical_y = pixels.get("PhysicalSizeX"), pixels.get("PhysicalSizeY")
+        # Channel names in acquisition (index) order, used to map segmentation channel names to indices.
+        channel_names = [c.get("Name") for c in pixels if c.tag.endswith("Channel")]
         return {
             "SizeX": int(size_x) if size_x else None,
             "SizeY": int(size_y) if size_y else None,
             "SizeC": int(size_c) if size_c else 1,
+            "ChannelNames": channel_names,
             "PhysicalSizeX": float(physical_x) if physical_x else None,
             "PhysicalSizeY": float(physical_y) if physical_y else None,
             "PhysicalSizeUnitX": pixels.get("PhysicalSizeXUnit"),
