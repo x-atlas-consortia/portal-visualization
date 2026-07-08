@@ -37,6 +37,7 @@ from ..utils import (
     get_image_metadata,
     get_image_scale,
     get_matches,
+    get_ome_tiff_metadata,
     group_by_file_name,
     with_config_builder_user_agent,
 )
@@ -301,7 +302,50 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             )
         return entries
 
-    def _setup_view_config(self, vc, dataset, view_type, disable_3d=[], use_full_resolution=[], image_fileuids=None):
+    def _build_base_image_layers(self, image_fileuids, image_channel_count):
+        """Build the beta ``imageLayer`` coordination entries for the base-image views.
+
+        A single image needs no explicit channels: the client auto-initializes the sole (primary)
+        image layer from the OME-TIFF. With multiple images the beta model does NOT auto-discover
+        channels for the non-primary layers, so each layer is fully specified (an absent/partial
+        channel list dereferences ``undefined`` and crashes the view). Only the first image is
+        visible by default; the rest are toggleable in the layer controller.
+        """
+        fileuids = image_fileuids or []
+        if len(fileuids) <= 1:
+            return [{"fileUid": uid} for uid in fileuids]
+
+        num_channels = max(1, min(image_channel_count or 1, len(SEGMENTATION_CHANNEL_COLORS)))
+        channels = [
+            {
+                "spatialTargetC": c,
+                "spatialChannelColor": SEGMENTATION_CHANNEL_COLORS[c],
+                "spatialChannelVisible": True,
+                "spatialChannelOpacity": 1.0,
+            }
+            for c in range(num_channels)
+        ]
+        return [
+            {
+                "fileUid": uid,
+                "spatialLayerVisible": i == 0,
+                "spatialLayerOpacity": 1.0,
+                "photometricInterpretation": "BlackIsZero",
+                "imageChannel": CL([dict(channel) for channel in channels]),
+            }
+            for i, uid in enumerate(fileuids)
+        ]
+
+    def _setup_view_config(
+        self,
+        vc,
+        dataset,
+        view_type,
+        disable_3d=[],
+        use_full_resolution=[],
+        image_fileuids=None,
+        image_channel_count=None,
+    ):
         if view_type == BASE_IMAGE_VIEW_TYPE:
             spatial_view = vc.add_view("spatialBeta", dataset=dataset, x=3, y=0, w=9, h=12).set_props(
                 useFullResolutionImage=use_full_resolution
@@ -312,7 +356,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             )
             vc.link_views_by_dict(
                 [spatial_view, lc_view],
-                {"imageLayer": CL([{"fileUid": uid} for uid in (image_fileuids or [])])},
+                {"imageLayer": CL(self._build_base_image_layers(image_fileuids, image_channel_count))},
                 meta=True,
                 scope_prefix=get_initial_coordination_scope_prefix("A", "image"),
             )
@@ -423,8 +467,10 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
         else:
             image_fileuids = [f"image_{i}" for i in range(len(found_images))]
+            first_image_url = None
             for fileuid, img_path in zip(image_fileuids, found_images, strict=True):
                 img_url, offsets_url, _ = get_img_and_offset_url_func(img_path, self.image_pyramid_regex)
+                first_image_url = first_image_url or img_url
                 dataset.add_object(
                     ImageOmeTiffWrapper(
                         img_url=img_url,
@@ -433,6 +479,11 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
                         coordination_values={"fileUid": fileuid},
                     )
                 )
+            # Multiple images need explicit per-layer channels (see _build_base_image_layers); read the
+            # channel count once from the first image (they share an acquisition, so channels match).
+            image_channel_count = None
+            if len(found_images) > 1:
+                image_channel_count = (get_ome_tiff_metadata(first_image_url) or {}).get("SizeC")
 
         if self.view_type == GEOMX_IMAGE_VIEW_TYPE:
             self._add_aoi_rois(dataset)
@@ -443,6 +494,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             self.view_type,
             use_full_resolution=self.use_full_resolution,
             image_fileuids=image_fileuids if self.view_type == BASE_IMAGE_VIEW_TYPE else None,
+            image_channel_count=image_channel_count if self.view_type == BASE_IMAGE_VIEW_TYPE else None,
         ).to_dict()
         return get_conf_cells(conf)
 
@@ -699,8 +751,10 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
             vc, dataset = self._create_vitessce_config(name=pos_name, dataset_name=pos_name)
             sorted_images = sorted(images, key=self._get_hybcycle)
             image_fileuids = [f"image_{i}" for i in range(len(sorted_images))]
+            first_image_url = None
             for fileuid, img_path in zip(image_fileuids, sorted_images, strict=True):
                 img_url, offsets_url, _ = self._get_img_and_offset_url(img_path, IMAGE_PYRAMID_DIR)
+                first_image_url = first_image_url or img_url
                 dataset.add_object(
                     ImageOmeTiffWrapper(
                         img_url=img_url,
@@ -709,12 +763,15 @@ class SeqFISHViewConfBuilder(AbstractImagingViewConfBuilder):
                         coordination_values={"fileUid": fileuid},
                     )
                 )
+            # All hyb-cycle images of a position share an acquisition, so read channels once.
+            image_channel_count = (get_ome_tiff_metadata(first_image_url) or {}).get("SizeC")
             vc = self._setup_view_config(
                 vc,
                 dataset,
                 self.view_type,
                 disable_3d=[self._get_hybcycle(img_path) for img_path in sorted_images],
                 image_fileuids=image_fileuids,
+                image_channel_count=image_channel_count,
             )
             confs.append(vc.to_dict())
         return get_conf_cells(confs)
