@@ -360,6 +360,8 @@ def mock_zarr_store(entity_path, mocker, obs_count):
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
     mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
     mocker.patch("src.portal_visualization.builders.sprm_builders.get_ome_tiff_metadata", return_value=None)
+    # Multi-image base builders (SeqFISH) read the channel count from the first image's OME-TIFF.
+    mocker.patch("src.portal_visualization.builders.imaging_builders.get_ome_tiff_metadata", return_value={"SizeC": 3})
     # Mock read_metadata_from_url (SegmentationMaskBuilder fetches zarr metadata over HTTP)
     mocker.patch(
         "src.portal_visualization.builders.epic_builders.SegmentationMaskBuilder.read_metadata_from_url",
@@ -949,6 +951,29 @@ def generate_imaging_builder_test_cases():
         )
     )
 
+    # ImagePyramidViewConfBuilder with multiple base images (exercises the beta multi-layer /
+    # explicit-channel path in get_conf_cells_common, which single-image datasets skip).
+    test_cases.append(
+        (
+            "ImagePyramidViewConfBuilder/generated-multi-image",
+            make_entity(
+                uuid="f9ae931b8b49252f150d7f8bf1d2d13e",
+                status="QA",
+                soft_assaytype="image_pyramid",
+                data_types=["image_pyramid", "PAS"],
+                hints=["is_support", "pyramid", "is_image"],
+                files=[
+                    {"rel_path": "ometiff-pyramids/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.ome.tif"},
+                    {"rel_path": "ometiff-pyramids/processedMicroscopy/VAN0003-LK-33-2-IMS.ome.tif"},
+                    {"rel_path": "output_offsets/processedMicroscopy/VAN0003-LK-33-2-PAS_FFPE.offsets.json"},
+                    {"rel_path": "output_offsets/processedMicroscopy/VAN0003-LK-33-2-IMS.offsets.json"},
+                ],
+                immediate_ancestors=[{"data_types": ["PAS"]}],
+                parent={"uuid": "8adc3c31ca84ec4b958ed20a7c4f4919"},
+            ),
+        )
+    )
+
     # KaggleSegImagePyramidViewConfBuilder (Kaggle-2: base images co-located, no parent)
     test_cases.append(
         (
@@ -1503,6 +1528,19 @@ def test_config_builder_user_agent_evades_scraping_filter(request_init):
     # Existing headers must be preserved.
     if request_init and request_init.get("headers"):
         assert headers["Authorization"] == "Bearer x"
+
+
+@pytest.mark.requires_full
+def test_get_ome_tiff_metadata_sends_config_builder_user_agent(mocker):
+    """Remote OME-TIFF metadata reads must carry the throttle-safe UA via fsspec client_kwargs."""
+    from src.portal_visualization.utils import PORTAL_VIS_USER_AGENT, get_ome_tiff_metadata
+
+    fsspec_open = mocker.patch("src.portal_visualization.utils.fsspec.open")
+    fsspec_open.return_value.open.side_effect = RuntimeError("no network in test")
+
+    assert get_ome_tiff_metadata("https://assets.example/uuid/x.ome.tif?token=abc") is None
+    _, kwargs = fsspec_open.call_args
+    assert kwargs["client_kwargs"]["headers"]["User-Agent"] == PORTAL_VIS_USER_AGENT
 
 
 @pytest.mark.requires_full

@@ -182,7 +182,10 @@ def get_ome_tiff_metadata(url):
 
         import tifffile
 
-        with fsspec.open(url).open() as f, tifffile.TiffFile(f) as tif:
+        # Send the config-builder User-Agent so these server-side range reads aren't throttled by the
+        # assets back-end's scraping filter (the token, when present, rides in the URL query string).
+        source = fsspec.open(url, client_kwargs=with_config_builder_user_agent(None))
+        with source.open() as f, tifffile.TiffFile(f) as tif:
             ome_xml = tif.ome_metadata
         if not ome_xml:
             return None
