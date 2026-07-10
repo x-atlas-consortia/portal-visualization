@@ -302,39 +302,75 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             )
         return entries
 
-    def _build_base_image_layers(self, image_fileuids, image_channel_count):
-        """Build the beta ``imageLayer`` coordination entries for the base-image views.
+    def _link_base_image_layers(self, vc, spatial_view, lc_view, image_fileuids, image_channel_count):
+        """Wire the base-image layers into the beta spatial + layer-controller views.
 
-        A single image needs no explicit channels: the client auto-initializes the sole (primary)
-        image layer from the OME-TIFF. With multiple images the beta model does NOT auto-discover
-        channels for the non-primary layers, so each layer is fully specified (an absent/partial
-        channel list dereferences ``undefined`` and crashes the view). Only the first image is
-        visible by default; the rest are toggleable in the layer controller.
+        A single image just links both views to the sole (auto-initialized) layer. With multiple
+        images the beta spatial view rasterizes EVERY loaded image, so each needs a fully-specified
+        layer (an absent/partial channel list dereferences ``undefined`` and crashes the view) — but
+        we don't want one controller panel per tile. Following Vitessce's "proxy layer" pattern, the
+        layer controller is linked to a single proxy layer while the spatial view is linked to all
+        tiles; both reference the SAME shared coordination scopes (visibility, opacity, photometric,
+        and the ``imageChannel`` color/contrast-slider scopes), so the one controller panel drives
+        every tile at once. The two ``link_views_by_dict`` calls share a scope prefix; the numbering
+        skips already-used scope names, so they don't collide.
         """
         fileuids = image_fileuids or []
+        prefix = get_initial_coordination_scope_prefix("A", "image")
         if len(fileuids) <= 1:
-            return [{"fileUid": uid} for uid in fileuids]
+            vc.link_views_by_dict(
+                [spatial_view, lc_view],
+                {"imageLayer": CL([{"fileUid": uid} for uid in fileuids])},
+                meta=True,
+                scope_prefix=prefix,
+            )
+            return
 
         num_channels = max(1, min(image_channel_count or 1, len(SEGMENTATION_CHANNEL_COLORS)))
-        channels = [
-            {
-                "spatialTargetC": c,
-                "spatialChannelColor": SEGMENTATION_CHANNEL_COLORS[c],
-                "spatialChannelVisible": True,
-                "spatialChannelOpacity": 1.0,
-            }
-            for c in range(num_channels)
-        ]
-        return [
-            {
+        visible, opacity, photometric = vc.add_coordination(
+            "spatialLayerVisible", "spatialLayerOpacity", "photometricInterpretation"
+        )
+        visible.set_value(True)
+        opacity.set_value(1.0)
+        photometric.set_value("BlackIsZero")
+        # Channel labels drawn once (on the proxy / first tile), not duplicated across every tile.
+        labels_on, labels_off = vc.add_coordination("spatialChannelLabelsVisible", "spatialChannelLabelsVisible")
+        labels_on.set_value(True)
+        labels_off.set_value(False)
+        # One CL instance -> its per-channel scopes (incl. the contrast slider) are shared by every layer.
+        shared_channels = CL(
+            [
+                {
+                    "spatialTargetC": c,
+                    "spatialChannelColor": SEGMENTATION_CHANNEL_COLORS[c],
+                    "spatialChannelVisible": True,
+                    "spatialChannelWindow": None,
+                }
+                for c in range(num_channels)
+            ]
+        )
+
+        def layer(uid, labels_scope):
+            return {
                 "fileUid": uid,
-                "spatialLayerVisible": i == 0,
-                "spatialLayerOpacity": 1.0,
-                "photometricInterpretation": "BlackIsZero",
-                "imageChannel": CL([dict(channel) for channel in channels]),
+                "spatialLayerVisible": visible,
+                "spatialLayerOpacity": opacity,
+                "photometricInterpretation": photometric,
+                "spatialChannelLabelsVisible": labels_scope,
+                "imageChannel": shared_channels,
             }
-            for i, uid in enumerate(fileuids)
-        ]
+
+        # Controller: a single proxy layer -> one panel of channel sliders.
+        vc.link_views_by_dict(
+            [lc_view], {"imageLayer": CL([layer(fileuids[0], labels_on)])}, meta=True, scope_prefix=prefix
+        )
+        # Spatial view: every tile; channel labels drawn on the first tile only.
+        vc.link_views_by_dict(
+            [spatial_view],
+            {"imageLayer": CL([layer(uid, labels_on if i == 0 else labels_off) for i, uid in enumerate(fileuids)])},
+            meta=True,
+            scope_prefix=prefix,
+        )
 
     def _setup_view_config(
         self,
@@ -354,12 +390,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             lc_view = vc.add_view("layerControllerBeta", dataset=dataset, x=0, y=0, w=3, h=8).set_props(
                 disable3d=disable_3d, disableChannelsIfRgbDetected=True
             )
-            vc.link_views_by_dict(
-                [spatial_view, lc_view],
-                {"imageLayer": CL(self._build_base_image_layers(image_fileuids, image_channel_count))},
-                meta=True,
-                scope_prefix=get_initial_coordination_scope_prefix("A", "image"),
-            )
+            self._link_base_image_layers(vc, spatial_view, lc_view, image_fileuids, image_channel_count)
         if view_type == GEOMX_IMAGE_VIEW_TYPE:
             self._add_views(vc, dataset)
 
