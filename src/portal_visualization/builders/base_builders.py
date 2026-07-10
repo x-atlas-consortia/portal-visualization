@@ -211,9 +211,14 @@ class ViewConfBuilder(ABC):
         :param dict file: File dict which will have its rel_path replaced by url
         :rtype: dict The file with rel_path replaced by url
 
+        Authenticate via the ``requestInit`` Authorization header (as the zarr wrappers do) rather
+        than a ``?token=`` query param: a token in the URL string fails to load on the front end,
+        and a published dataset (``request_init`` is None) then hits the public asset with no token
+        at all.
+
         >>> from pprint import pprint
         >>> builder = _DocTestBuilder(
-        ...   entity={ "uuid": "uuid" },
+        ...   entity={ "uuid": "uuid", "status": "QA" },
         ...   groups_token='groups_token',
         ...   assets_endpoint='https://example.com')
         >>> file = {
@@ -223,13 +228,15 @@ class ViewConfBuilder(ABC):
         >>> pprint(builder._replace_url_in_file(file))
         {'coordination_values': {'obsType': 'cell'},
          'file_type': 'cells.json',
-         'url': 'https://example.com/uuid/cells.json?token=groups_token'}
+         'request_init': {'headers': {'Authorization': 'Bearer groups_token'}},
+         'url': 'https://example.com/uuid/cells.json'}
         """
 
         return {
             "coordination_values": file["coordination_values"],
             "file_type": file["file_type"],
-            "url": self._build_assets_url(file["rel_path"]),
+            "url": self._build_assets_url(file["rel_path"], use_token=False),
+            "request_init": self._get_request_init(),
         }
 
     def _build_assets_url(self, rel_path, use_token=True):

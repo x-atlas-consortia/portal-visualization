@@ -1544,6 +1544,43 @@ def test_get_ome_tiff_metadata_sends_config_builder_user_agent(mocker):
 
 
 @pytest.mark.requires_full
+def test_seqfish_single_controller_drives_all_tiles(mocker):
+    """SeqFISH uses the proxy-layer pattern: one controller panel, all tiles in the spatial view,
+    both driven by the same shared channel/slider scopes."""
+    from src.portal_visualization.builders.imaging_builders import SeqFISHViewConfBuilder
+
+    mocker.patch(
+        "src.portal_visualization.builders.imaging_builders.get_ome_tiff_metadata",
+        return_value={"SizeC": 3},
+    )
+    files = []
+    for hc in range(4):
+        files.append({"rel_path": f"ometiff-pyramids/HybCycle_{hc}/MMStack_Pos5.ome.tif"})
+        files.append({"rel_path": f"output_offsets/HybCycle_{hc}/MMStack_Pos5.offsets.json"})
+    entity = {"uuid": "u", "status": "QA", "vitessce-hints": ["is_image"], "files": files}
+
+    conf = SeqFISHViewConfBuilder(entity, groups_token, assets_url).get_conf_cells()[0][0]
+    cs = conf["coordinationSpace"]
+    meta_scopes = cs["metaCoordinationScopes"]
+
+    def layer_count(component):
+        view = next(v for v in conf["layout"] if v["component"] == component)
+        metas = view["coordinationScopes"]["metaCoordinationScopes"]
+        metas = metas if isinstance(metas, list) else [metas]
+        return sum(len(meta_scopes[m]["imageLayer"]) for m in set(metas))
+
+    # Controller shows ONE panel; the spatial view still renders every tile (beta rasterizes each).
+    assert layer_count("layerControllerBeta") == 1
+    assert layer_count("spatialBeta") == 4
+
+    # The controller's proxy layer and the spatial tiles reference the SAME channel scopes.
+    by = cs["metaCoordinationScopesBy"]
+    ctrl_channels = {s for v in by["init_A_image_0"]["imageLayer"]["imageChannel"].values() for s in v}
+    spatial_channels = {s for v in by["init_A_image_1"]["imageLayer"]["imageChannel"].values() for s in v}
+    assert ctrl_channels == spatial_channels
+
+
+@pytest.mark.requires_full
 def test_read_zip_zarr_opens_store(mocker):
     # Mock the zarr v3 store wiring so no network access occurs.
     mock_zarr_obj = mocker.Mock()
