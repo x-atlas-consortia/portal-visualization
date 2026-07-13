@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,16 @@ IMAGE_CHANNEL_COLORS = [
     [0, 255, 255],
 ]
 MAX_IMAGE_CHANNELS = len(IMAGE_CHANNEL_COLORS)
+
+# Multi-region SPRM (CellDIVE/MIBI/Cytokit) builds one config per region, and each region issues
+# several serialized remote reads (the anndata zarr + two OME-TIFF headers). Building 20-30 regions
+# serially took minutes; the builds are independent and network-bound, so run them concurrently.
+# Reads within a region are sequential, so peak in-flight requests ~= pool size, not pool x reads;
+# a CDN-backed assets server handles a few dozen concurrent range reads without issue, and the
+# config-builder User-Agent keeps them off the scraping throttle. Sized to build a typical
+# multi-region dataset (~20-30 regions) in a single wave.
+# ponytail: fixed cap; lower it only if the assets server shows strain under this many in-flight reads.
+SPRM_REGION_BUILD_CONCURRENCY = 32
 
 
 class CytokitSPRMViewConfigError(Exception):
@@ -528,27 +539,35 @@ class MultiImageSPRMAnndataViewConfBuilder(ViewConfBuilder):
             raise FileNotFoundError(f"Could not find images of the SPRM analysis with uuid {self._uuid}")
         return found_ids
 
-    def get_conf_cells(self, marker=None):
-        found_ids = self._find_ids()
-        confs = []
-        for id in sorted(found_ids):
-            builder = SPRMAnnDataViewConfBuilder(
-                entity=self._entity,
-                groups_token=self._groups_token,
-                assets_endpoint=self._assets_endpoint,
-                base_name=id,
-                imaging_path=self._image_pyramid_subdir,
-                mask_path=self._mask_pyramid_subdir,
-                image_name=f"{id}_{self._expression_id}",
-                mask_name=f"{id}_{self._mask_id}",
+    def _build_region_conf(self, region_id, marker):
+        builder = SPRMAnnDataViewConfBuilder(
+            entity=self._entity,
+            groups_token=self._groups_token,
+            assets_endpoint=self._assets_endpoint,
+            base_name=region_id,
+            imaging_path=self._image_pyramid_subdir,
+            mask_path=self._mask_pyramid_subdir,
+            image_name=f"{region_id}_{self._expression_id}",
+            mask_name=f"{region_id}_{self._mask_id}",
+        )
+        conf = builder.get_conf_cells(marker=marker).conf
+        if conf == {}:
+            raise MultiImageSPRMAnndataViewConfigError(  # pragma: no cover
+                f"Cytokit SPRM assay with uuid {self._uuid} has empty view config for id '{region_id}'"
             )
-            conf = builder.get_conf_cells(marker=marker).conf
-            if conf == {}:
-                raise MultiImageSPRMAnndataViewConfigError(  # pragma: no cover
-                    f"Cytokit SPRM assay with uuid {self._uuid} has empty view\
-                        config for id '{id}'"
-                )
-            confs.append(conf)
+        return conf
+
+    def get_conf_cells(self, marker=None):
+        found_ids = sorted(self._find_ids())
+        # Each region's build is independent and dominated by serialized remote reads, so build them
+        # concurrently (network I/O releases the GIL). executor.map preserves order and re-raises any
+        # per-region error on iteration, matching the previous serial behavior.
+        if len(found_ids) == 1:
+            confs = [self._build_region_conf(found_ids[0], marker)]
+        else:
+            max_workers = min(len(found_ids), SPRM_REGION_BUILD_CONCURRENCY)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                confs = list(executor.map(lambda region_id: self._build_region_conf(region_id, marker), found_ids))
         conf = confs if len(confs) > 1 else confs[0]
         return get_conf_cells(conf)
 
