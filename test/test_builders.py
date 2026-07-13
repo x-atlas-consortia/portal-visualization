@@ -1678,6 +1678,8 @@ def test_sprm_builds_when_zarr_store_unavailable(mocker):
     assert conf.get("datasets")
 
 
+# requires_full: imports sprm_builders, whose module-level `import numpy` is absent in the thin install.
+@pytest.mark.requires_full
 def test_multiregion_sprm_preserves_region_order(mocker):
     """Regions build concurrently (ThreadPoolExecutor), but the aggregated config list must stay in
     sorted region order regardless of which thread finishes first — else per-region views get shuffled."""
