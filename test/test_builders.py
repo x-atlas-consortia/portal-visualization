@@ -1678,6 +1678,35 @@ def test_sprm_builds_when_zarr_store_unavailable(mocker):
     assert conf.get("datasets")
 
 
+# requires_full: imports sprm_builders, whose module-level `import numpy` is absent in the thin install.
+@pytest.mark.requires_full
+def test_multiregion_sprm_preserves_region_order(mocker):
+    """Regions build concurrently (ThreadPoolExecutor), but the aggregated config list must stay in
+    sorted region order regardless of which thread finishes first — else per-region views get shuffled."""
+    import time
+
+    from src.portal_visualization.builders import sprm_builders
+    from src.portal_visualization.builders.sprm_builders import MultiImageSPRMAnndataViewConfBuilder
+
+    region_ids = ["reg003", "reg001", "reg002", "reg005", "reg004"]
+    # Passthrough so we can inspect the raw aggregated list without VitessceConfig.from_dict.
+    mocker.patch.object(sprm_builders, "get_conf_cells", side_effect=lambda conf: (conf, []))
+    mocker.patch.object(MultiImageSPRMAnndataViewConfBuilder, "_find_ids", return_value=region_ids)
+    # Descending delay by sorted position: the last region finishes first, so an unordered collector
+    # (e.g. as_completed without re-sort) would return reversed results and fail this assertion.
+    order = {rid: i for i, rid in enumerate(sorted(region_ids))}
+
+    def fake_build(self, region_id, marker):
+        time.sleep(0.02 * (len(region_ids) - order[region_id]))
+        return {"region": region_id}
+
+    mocker.patch.object(MultiImageSPRMAnndataViewConfBuilder, "_build_region_conf", fake_build)
+
+    builder = MultiImageSPRMAnndataViewConfBuilder({"uuid": "u", "status": "QA", "files": []}, "t", "https://x")
+    confs, _cells = builder.get_conf_cells()
+    assert [c["region"] for c in confs] == sorted(region_ids)
+
+
 @pytest.mark.requires_full
 def test_safe_http_filesystem_listing_error_handling():
     """_SafeHTTPFileSystem returns [] for forbidden/absent directory listings (both _ls and _find,

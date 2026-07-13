@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,16 @@ IMAGE_CHANNEL_COLORS = [
     [0, 255, 255],
 ]
 MAX_IMAGE_CHANNELS = len(IMAGE_CHANNEL_COLORS)
+
+# Multi-region SPRM (CellDIVE/MIBI/Cytokit) builds one config per region, and each region issues a
+# few remote reads (the anndata zarr + two OME-TIFF headers). Building 20-30 regions serially took
+# minutes; the builds are independent and network-bound, so run them concurrently, sized to build a
+# typical multi-region dataset (~20-30 regions) in a single wave. Each region now also reads its
+# three sources concurrently (see get_conf_cells), so peak in-flight requests are a small multiple of
+# this cap -- a CDN-backed assets server handles the resulting few dozen concurrent range reads
+# without issue, and the config-builder User-Agent keeps them off the scraping throttle.
+# ponytail: fixed cap; lower it only if the assets server shows strain under this many in-flight reads.
+SPRM_REGION_BUILD_CONCURRENCY = 32
 
 
 class CytokitSPRMViewConfigError(Exception):
@@ -294,22 +305,43 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             self._require_zarr_store(zarr_path)
         adata_url = self._build_assets_url(zarr_path, use_token=False)
 
-        z = self.zarr_store()
-        # zarr v3 iterates an array into 0-d ndarrays; read values explicitly as a list of strings.
-        # z is None if the store failed to open; fall back to the default factors so the config still
-        # builds (the _get_n_obs / _embedding_preference / _prioritized_cell_set_selection calls below
-        # already guard against None).
-        additional_cluster_names = (
-            z["uns/cluster_columns"][:].tolist() if z is not None and "uns/cluster_columns" in z else []
-        )
-        obs_set_names = sorted(set(additional_cluster_names + DEFAULT_SPRM_ANNDATA_FACTORS))
-        obs_set_paths = [f"obs/{key}" for key in obs_set_names]
-        n_obs = self._get_n_obs(z)
-        embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
-        # Prefer the embedding's matching clustering, then the default factors (tSNE-first) so a
-        # sensible clustering is always preselected instead of Vitessce's alphabetically-first default.
-        candidate_cell_sets = [prioritized_cell_set, *DEFAULT_SPRM_ANNDATA_FACTORS]
-        prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets)
+        # Beta spatial/layerController views read the new image-coordination model, so the expression
+        # image and the segmentation bitmask are separate layers (not MultiImageWrapper). URL derivation
+        # here is local (regex over the file list); only the reads kicked off below hit the network.
+        found_image_file = self._check_sprm_image(self._get_full_image_path())
+        img_url, offsets_url, _ = self._get_img_and_offset_url(found_image_file, self.image_pyramid_regex)
+        found_bitmask_file = self._check_sprm_image(self._get_bitmask_image_path())
+        bitmask_url, bitmask_offsets_url, _ = self._get_img_and_offset_url(found_bitmask_file, self.image_pyramid_regex)
+
+        def read_anndata_metadata():
+            z = self.zarr_store()
+            # zarr v3 iterates an array into 0-d ndarrays; read values explicitly as a list of strings.
+            # z is None if the store failed to open; fall back to the default factors so the config still
+            # builds (the _get_n_obs / _embedding_preference / _prioritized_cell_set_selection calls
+            # already guard against None).
+            additional_cluster_names = (
+                z["uns/cluster_columns"][:].tolist() if z is not None and "uns/cluster_columns" in z else []
+            )
+            obs_set_names = sorted(set(additional_cluster_names + DEFAULT_SPRM_ANNDATA_FACTORS))
+            n_obs = self._get_n_obs(z)
+            embedding_path, embedding_name, prioritized_cell_set = self._embedding_preference(z)
+            # Prefer the embedding's matching clustering, then the default factors (tSNE-first) so a
+            # sensible clustering is always preselected instead of Vitessce's alphabetically-first default.
+            candidate_cell_sets = [prioritized_cell_set, *DEFAULT_SPRM_ANNDATA_FACTORS]
+            prioritized_selection = self._prioritized_cell_set_selection(z, obs_set_names, candidate_cell_sets)
+            return obs_set_names, n_obs, embedding_path, embedding_name, prioritized_selection
+
+        # These three reads -- the anndata zarr metadata and the two OME-TIFF headers (expression image
+        # + segmentation mask) -- are mutually independent and network-bound, so run them concurrently:
+        # a region then pays one read-latency instead of three back-to-back. Socket I/O releases the GIL.
+        # All Vitessce config mutation stays on this thread, after the reads join.
+        with ThreadPoolExecutor(max_workers=3) as read_pool:
+            anndata_future = read_pool.submit(read_anndata_metadata)
+            image_meta_future = read_pool.submit(get_ome_tiff_metadata, img_url)
+            bitmask_meta_future = read_pool.submit(get_ome_tiff_metadata, bitmask_url)
+            obs_set_names, n_obs, embedding_path, embedding_name, prioritized_selection = anndata_future.result()
+            image_metadata = image_meta_future.result()
+            bitmask_metadata = bitmask_meta_future.result()
 
         anndata_wrapper = AnnDataWrapper(
             adata_url=adata_url,
@@ -318,19 +350,13 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             obs_embedding_paths=[embedding_path],
             obs_embedding_names=[embedding_name],
             obs_set_names=obs_set_names,
-            obs_set_paths=obs_set_paths,
+            obs_set_paths=[f"obs/{key}" for key in obs_set_names],
             # Cells are shown via the (image-aligned) segmentation mask. obsm/xy centroids live in a
             # different coordinate space than the registered image and render misaligned, so omit them.
             coordination_values={"obsType": "cell"},
             request_init=self._get_request_init(),
         )
         dataset = dataset.add_object(anndata_wrapper)
-
-        # Beta spatial/layerController views read the new image-coordination model, so the
-        # expression image and the segmentation bitmask are separate layers (not MultiImageWrapper).
-        found_image_file = self._check_sprm_image(self._get_full_image_path())
-        img_url, offsets_url, _ = self._get_img_and_offset_url(found_image_file, self.image_pyramid_regex)
-        image_metadata = get_ome_tiff_metadata(img_url)
         dataset = dataset.add_object(
             ImageOmeTiffWrapper(
                 img_url=img_url,
@@ -338,13 +364,11 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                 coordination_values={"fileUid": "image"},
             )
         )
-        found_bitmask_file = self._check_sprm_image(self._get_bitmask_image_path())
-        bitmask_url, bitmask_offsets_url, _ = self._get_img_and_offset_url(found_bitmask_file, self.image_pyramid_regex)
         # The expression image and mask are often stored at different physical pixel sizes (and units);
         # scale the segmentation into the image's coordinate space so the cells overlay it (the legacy
         # raster config aligned them implicitly). Handles unit conversion and a unitless/absent mask
         # physical size, degrading to no scaling only when neither OME-TIFF exposes physical sizes.
-        segmentation_scale = get_segmentation_alignment_scale(image_metadata, get_ome_tiff_metadata(bitmask_url))
+        segmentation_scale = get_segmentation_alignment_scale(image_metadata, bitmask_metadata)
         dataset = dataset.add_object(
             ObsSegmentationsOmeTiffWrapper(
                 img_url=bitmask_url,
@@ -528,27 +552,35 @@ class MultiImageSPRMAnndataViewConfBuilder(ViewConfBuilder):
             raise FileNotFoundError(f"Could not find images of the SPRM analysis with uuid {self._uuid}")
         return found_ids
 
-    def get_conf_cells(self, marker=None):
-        found_ids = self._find_ids()
-        confs = []
-        for id in sorted(found_ids):
-            builder = SPRMAnnDataViewConfBuilder(
-                entity=self._entity,
-                groups_token=self._groups_token,
-                assets_endpoint=self._assets_endpoint,
-                base_name=id,
-                imaging_path=self._image_pyramid_subdir,
-                mask_path=self._mask_pyramid_subdir,
-                image_name=f"{id}_{self._expression_id}",
-                mask_name=f"{id}_{self._mask_id}",
+    def _build_region_conf(self, region_id, marker):
+        builder = SPRMAnnDataViewConfBuilder(
+            entity=self._entity,
+            groups_token=self._groups_token,
+            assets_endpoint=self._assets_endpoint,
+            base_name=region_id,
+            imaging_path=self._image_pyramid_subdir,
+            mask_path=self._mask_pyramid_subdir,
+            image_name=f"{region_id}_{self._expression_id}",
+            mask_name=f"{region_id}_{self._mask_id}",
+        )
+        conf = builder.get_conf_cells(marker=marker).conf
+        if conf == {}:
+            raise MultiImageSPRMAnndataViewConfigError(  # pragma: no cover
+                f"Cytokit SPRM assay with uuid {self._uuid} has empty view config for id '{region_id}'"
             )
-            conf = builder.get_conf_cells(marker=marker).conf
-            if conf == {}:
-                raise MultiImageSPRMAnndataViewConfigError(  # pragma: no cover
-                    f"Cytokit SPRM assay with uuid {self._uuid} has empty view\
-                        config for id '{id}'"
-                )
-            confs.append(conf)
+        return conf
+
+    def get_conf_cells(self, marker=None):
+        found_ids = sorted(self._find_ids())
+        # Each region's build is independent and dominated by serialized remote reads, so build them
+        # concurrently (network I/O releases the GIL). executor.map preserves order and re-raises any
+        # per-region error on iteration, matching the previous serial behavior.
+        if len(found_ids) == 1:
+            confs = [self._build_region_conf(found_ids[0], marker)]
+        else:
+            max_workers = min(len(found_ids), SPRM_REGION_BUILD_CONCURRENCY)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                confs = list(executor.map(lambda region_id: self._build_region_conf(region_id, marker), found_ids))
         conf = confs if len(confs) > 1 else confs[0]
         return get_conf_cells(conf)
 
