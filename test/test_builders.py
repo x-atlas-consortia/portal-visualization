@@ -1712,15 +1712,16 @@ def test_sprm_segmentation_channels_from_bitmask():
     named = builder._build_segmentation_channels(
         {"SizeC": 4, "ChannelNames": ["cells", "nuclei", "cell_boundaries", "nucleus_boundaries"]}
     )
-    assert [c["obsType"] for c in named] == ["cell", "nuclei", "cell_boundaries", "nucleus_boundaries"]
+    # Cell mask keeps obsType "cell" (AnnData join); the rest are humanized for the layer-controller label.
+    assert [c["obsType"] for c in named] == ["cell", "Nuclei", "Cell Boundaries", "Nucleus Boundaries"]
     assert named[0]["obsColorEncoding"] == "cellSetSelection"
     assert all(c["obsColorEncoding"] == "spatialChannelColor" for c in named[1:])
     assert all(c["spatialChannelVisible"] and c["spatialSegmentationFilled"] for c in named)
 
     # No channel names -> index-named fallbacks, none treated as the cell mask; None -> single channel.
     assert [c["obsType"] for c in builder._build_segmentation_channels({"SizeC": 2})] == [
-        "segmentation-0",
-        "segmentation-1",
+        "Segmentation-0",
+        "Segmentation-1",
     ]
     assert builder._build_segmentation_channels(None) == builder._build_segmentation_channels({"SizeC": 1})
 
@@ -2238,7 +2239,7 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     # mask -- so the nucleus/boundary masks are no longer dropped from the config.
     obs_types = list(conf["coordinationSpace"].get("obsType", {}).values())
     assert "cell" in obs_types
-    assert "nuclei" in obs_types
+    assert "Nuclei" in obs_types
     assert "layerControllerBeta" in layout_str
     assert conf["coordinationSpace"]["obsSetSelection"]["A"] == prioritized_selection
     assert conf["coordinationSpace"]["embeddingType"]["A"] == "UMAP"

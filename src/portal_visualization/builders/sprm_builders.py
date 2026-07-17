@@ -274,8 +274,10 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         obsTypesFromChannelNames auto-init so every mask -- for CODEX: cells, nuclei, cell_boundaries,
         nucleus_boundaries -- is listed and toggleable, not just the cell mask. The cell mask keeps
         obsType "cell" so it colors by the selected cell set (joining the AnnData cells); the others
-        render in their own channel color. Falls back to a single channel when the mask (or the mocked
-        metadata) exposes no channel names."""
+        render in their own channel color. Their obsType doubles as the layer-controller label, so
+        humanize the raw channel name (e.g. "cell_boundaries" -> "Cell Boundaries"); Vitessce only
+        capitalizes the first character, so it would otherwise show the snake_case name verbatim.
+        Falls back to a single channel when the mask (or the mocked metadata) exposes no channel names."""
         names = (bitmask_metadata or {}).get("ChannelNames") or []
         size_c = (bitmask_metadata or {}).get("SizeC") or 1
         channels = []
@@ -285,7 +287,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             channels.append(
                 {
                     "spatialTargetC": c,
-                    "obsType": "cell" if is_cell else name,
+                    "obsType": "cell" if is_cell else name.replace("_", " ").title(),
                     "spatialChannelColor": IMAGE_CHANNEL_COLORS[c],
                     "spatialChannelVisible": True,
                     "spatialChannelOpacity": 1.0,
