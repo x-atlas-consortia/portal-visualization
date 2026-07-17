@@ -359,6 +359,7 @@ def mock_zarr_store(entity_path, mocker, obs_count):
     # Mock image metadata retrieval (used by imaging builders, harmless for others)
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
     mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
+
     # SPRM builders read OME-TIFF headers for both the expression image and the segmentation mask.
     # The mask exposes named channels (CODEX: cells/nuclei/cell_boundaries/nucleus_boundaries) that
     # drive one segmentation layer each; return those for mask URLs so the fan-out is exercised, and
@@ -2222,9 +2223,7 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
         marker=None,
         n_obs=150_000,
         channel_indices=list(range(6)),
-        segmentation_channels=builder._build_segmentation_channels(
-            {"SizeC": 2, "ChannelNames": ["cells", "nuclei"]}
-        ),
+        segmentation_channels=builder._build_segmentation_channels({"SizeC": 2, "ChannelNames": ["cells", "nuclei"]}),
         embedding_name=UMAP_EMBEDDING[1],
         prioritized_selection=prioritized_selection,
         description_text=description_text,
