@@ -242,24 +242,39 @@ class ViewConfBuilder(ABC):
     def _build_assets_url(self, rel_path, use_token=True):
         """Create a url for an asset.
         :param str rel_path: The path off of which the url should be built
-        :param bool use_token: Whether or not to append a groups token to the URL, default True
+        :param bool use_token: Whether or not to append a groups token to the URL, default True.
+            The token is omitted for Published datasets regardless, since their assets are public.
         :rtype: dict The file with rel_path replaced by url
 
         >>> from pprint import pprint
         >>> builder = _DocTestBuilder(
-        ...   entity={ "uuid": "uuid" },
+        ...   entity={ "uuid": "uuid", "status": "QA" },
         ...   groups_token='groups_token',
         ...   assets_endpoint='https://example.com')
         >>> builder._build_assets_url("rel_path/to/clusters.ome.tiff")
         'https://example.com/uuid/rel_path/to/clusters.ome.tiff?token=groups_token'
+
+        Published datasets are public, so no (expiring) token is appended:
+
+        >>> builder = _DocTestBuilder(
+        ...   entity={ "uuid": "uuid", "status": "Published" },
+        ...   groups_token='groups_token',
+        ...   assets_endpoint='https://example.com')
+        >>> builder._build_assets_url("rel_path/to/clusters.ome.tiff")
+        'https://example.com/uuid/rel_path/to/clusters.ome.tiff'
 
         """
         uuid = self._uuid
         if hasattr(self, "_epic_uuid"):  # pragma: no cover
             uuid = self._epic_uuid
         base_url = urllib.parse.urljoin(self._assets_endpoint, f"{uuid}/{rel_path}")
+        # Published assets are public: the browser fetches them without auth, so an expiring token in
+        # the URL is unnecessary and breaks the saved config once it expires. Only non-published assets
+        # need the URL token (viv's image tile requests can't carry an Authorization header).
+        if not use_token or self._entity.get("status") == "Published":
+            return base_url
         token_param = urllib.parse.urlencode({"token": self._groups_token})
-        return f"{base_url}?{token_param}" if use_token else base_url
+        return f"{base_url}?{token_param}"
 
     def _get_request_init(self):
         """Get request headers for requestInit parameter in Vitessce conf.

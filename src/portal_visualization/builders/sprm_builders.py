@@ -269,6 +269,32 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         remaining = [i for i in range(size_c) if i not in seg_indices]
         return (seg_indices + remaining)[:num_channels]
 
+    def _build_segmentation_channels(self, bitmask_metadata):
+        """One segmentation channel per bitmask channel, mirroring the front-end's
+        obsTypesFromChannelNames auto-init so every mask -- for CODEX: cells, nuclei, cell_boundaries,
+        nucleus_boundaries -- is listed and toggleable, not just the cell mask. The cell mask keeps
+        obsType "cell" so it colors by the selected cell set (joining the AnnData cells); the others
+        render in their own channel color. Falls back to a single channel when the mask (or the mocked
+        metadata) exposes no channel names."""
+        names = (bitmask_metadata or {}).get("ChannelNames") or []
+        size_c = (bitmask_metadata or {}).get("SizeC") or 1
+        channels = []
+        for c in range(min(size_c, MAX_IMAGE_CHANNELS)):
+            name = names[c] if c < len(names) and names[c] else f"segmentation-{c}"
+            is_cell = name.lower() in ("cell", "cells")
+            channels.append(
+                {
+                    "spatialTargetC": c,
+                    "obsType": "cell" if is_cell else name,
+                    "spatialChannelColor": IMAGE_CHANNEL_COLORS[c],
+                    "spatialChannelVisible": True,
+                    "spatialChannelOpacity": 1.0,
+                    "spatialSegmentationFilled": True,
+                    "obsColorEncoding": "cellSetSelection" if is_cell else "spatialChannelColor",
+                }
+            )
+        return channels
+
     def _build_description(self, image_metadata, n_obs):
         """Summary text for the description view: OME-TIFF header info plus the cell count."""
         lines = [self._image_name]
@@ -387,6 +413,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             marker,
             n_obs=n_obs,
             channel_indices=channel_indices,
+            segmentation_channels=self._build_segmentation_channels(bitmask_metadata),
             embedding_name=embedding_name,
             prioritized_selection=prioritized_selection,
             description_text=self._build_description(image_metadata, n_obs),
@@ -400,6 +427,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         marker,
         n_obs=0,
         channel_indices=(0,),
+        segmentation_channels=None,
         embedding_name="t-SNE",
         prioritized_selection=None,
         description_text="",
@@ -492,20 +520,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                             "fileUid": "segmentation-mask",
                             "spatialLayerVisible": True,
                             "spatialLayerOpacity": 1.0,
-                            "segmentationChannel": CL(
-                                [
-                                    {
-                                        # ponytail: channel 0 assumed to be the cell mask; obsType "cell"
-                                        # joins it to the AnnData cells so it colors by the selected cell set.
-                                        "spatialTargetC": 0,
-                                        "obsType": "cell",
-                                        "spatialChannelOpacity": 1.0,
-                                        "spatialChannelVisible": True,
-                                        "obsColorEncoding": "cellSetSelection",
-                                        "spatialSegmentationFilled": True,
-                                    }
-                                ]
-                            ),
+                            "segmentationChannel": CL(segmentation_channels),
                         }
                     ]
                 )
