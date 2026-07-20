@@ -459,25 +459,35 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
         vc.link_views(views, [CoordinationType.OBS_TYPE], ["cell"])
 
-        if marker:
-            vc.link_views(
-                views,
-                [CoordinationType.FEATURE_SELECTION, CoordinationType.OBS_COLOR_ENCODING],
-                [[marker], "geneSelection"],
-            )
-        else:
-            # Color cells (scatterplot + segmentation) by the selected cell set.
-            [obs_color_encoding] = vc.add_coordination(CoordinationType.OBS_COLOR_ENCODING)
-            obs_color_encoding.set_value("cellSetSelection")
-            for view in (spatial, scatterplot, cell_sets):
-                view.use_coordination(obs_color_encoding)
-            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE),
-            # enumerating each cluster ID so the whole clustering is selected initially.
-            if prioritized_selection:
-                [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
-                obs_set_selection.set_value(prioritized_selection)
-                for view in (spatial, scatterplot, cell_sets):
-                    view.use_coordination(obs_set_selection)
+        # One shared cell-coloring coordination, referenced by the scatterplot, the antigen (feature)
+        # list, the cell-set list, and the cell segmentation channel. Selecting a gene in the feature
+        # list sets obsColorEncoding=geneSelection + featureSelection; selecting a cell set sets
+        # obsColorEncoding=cellSetSelection + obsSetSelection -- all on the SAME scopes, so the
+        # scatterplot and the spatial (segmentation) cells recolor together either way.
+        [obs_color_encoding] = vc.add_coordination(CoordinationType.OBS_COLOR_ENCODING)
+        [feature_selection] = vc.add_coordination(CoordinationType.FEATURE_SELECTION)
+        [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
+        obs_color_encoding.set_value("geneSelection" if marker else "cellSetSelection")
+        feature_selection.set_value([marker] if marker else None)
+        # Preselect the embedding's matching clustering (UMAP if present, else t-SNE) when available.
+        obs_set_selection.set_value(prioritized_selection)
+
+        scatterplot.use_coordination(obs_color_encoding, feature_selection, obs_set_selection)
+        spatial.use_coordination(obs_color_encoding, feature_selection, obs_set_selection)
+        cell_sets.use_coordination(obs_color_encoding, obs_set_selection)
+        gene_list.use_coordination(obs_color_encoding, feature_selection)
+        if include_heatmap:
+            heatmap.use_coordination(feature_selection)
+
+        # Route the cell mask's coloring through the same shared scopes (instead of a fixed
+        # cellSetSelection) so the spatial segmentation follows the scatterplot/list selection. The
+        # other masks (nuclei, boundaries) keep their static spatialChannelColor -- they have no
+        # per-cell data to color by.
+        for channel in segmentation_channels or []:
+            if channel.get("obsType") == "cell":
+                channel["obsColorEncoding"] = obs_color_encoding
+                channel["featureSelection"] = feature_selection
+                channel["obsSetSelection"] = obs_set_selection
 
         # Wire the image and segmentation layers into the beta views. The beta spatial model does not
         # auto-discover channels, so each channel is listed explicitly (an empty/partial channel list

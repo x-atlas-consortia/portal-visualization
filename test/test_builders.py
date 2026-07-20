@@ -2243,6 +2243,16 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     assert "layerControllerBeta" in layout_str
     assert conf["coordinationSpace"]["obsSetSelection"]["A"] == prioritized_selection
     assert conf["coordinationSpace"]["embeddingType"]["A"] == "UMAP"
+    # Gene/cell-set selection must recolor both the scatterplot and the spatial cells: the scatterplot,
+    # feature list, cell-set list, and the cell segmentation channel share one obsColorEncoding scope.
+    scopes = {v["component"]: v["coordinationScopes"] for v in conf["layout"]}
+    shared_oce = scopes["scatterplot"]["obsColorEncoding"]
+    assert scopes["featureList"]["obsColorEncoding"] == shared_oce
+    assert scopes["obsSets"]["obsColorEncoding"] == shared_oce
+    assert scopes["featureList"]["featureSelection"] == scopes["scatterplot"]["featureSelection"]
+    seg_key = next(k for k in conf["coordinationSpace"]["metaCoordinationScopesBy"] if "obsSegmentations" in k)
+    seg_oce = conf["coordinationSpace"]["metaCoordinationScopesBy"][seg_key]["segmentationChannel"]["obsColorEncoding"]
+    assert shared_oce in seg_oce.values()  # cell mask follows the same encoding
     # First 6 image channels, each with its distinct color.
     channel_colors = list(conf["coordinationSpace"].get("spatialChannelColor", {}).values())
     for color in IMAGE_CHANNEL_COLORS:
