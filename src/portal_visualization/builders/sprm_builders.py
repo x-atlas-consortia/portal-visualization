@@ -490,6 +490,10 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                 "spatialChannelColor": IMAGE_CHANNEL_COLORS[position],
                 "spatialChannelVisible": True,
                 "spatialChannelOpacity": 1.0,
+                # Declare the contrast window per channel (None -> Vitessce auto-computes it). Without
+                # it there is no per-channel window scope, so all channels share one and their min/max
+                # sliders move together.
+                "spatialChannelWindow": None,
             }
             for position, channel in enumerate(channel_indices)
         ]
