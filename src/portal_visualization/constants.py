@@ -12,7 +12,7 @@ MULTIOMIC_ZARR_PATH = "hubmap_ui/mudata-zarr/secondary_analysis.zarr"
 XENIUM_ZARR_PATH = "Xenium.zarr"
 
 # Maximum number of observations to display heatmaps for performance reasons
-MAX_OBS_FOR_HEATMAP = 100_000
+MAX_OBS_FOR_HEATMAP = 125_000
 
 # User-Agent sent on server-side requests made while building a Vitessce config. It must NOT match
 # the back-end's scraping filter, so the config builder's traffic can be whitelisted:

@@ -359,7 +359,20 @@ def mock_zarr_store(entity_path, mocker, obs_count):
     # Mock image metadata retrieval (used by imaging builders, harmless for others)
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_image_metadata", return_value=None)
     mocker.patch("src.portal_visualization.builders.epic_builders.get_image_metadata", return_value=None)
-    mocker.patch("src.portal_visualization.builders.sprm_builders.get_ome_tiff_metadata", return_value=None)
+
+    # SPRM builders read OME-TIFF headers for both the expression image and the segmentation mask.
+    # The mask exposes named channels (CODEX: cells/nuclei/cell_boundaries/nucleus_boundaries) that
+    # drive one segmentation layer each; return those for mask URLs so the fan-out is exercised, and
+    # keep the expression image header empty (None) as before.
+    def _sprm_ome_tiff_metadata(url, *args, **kwargs):
+        if "mask" in url:
+            return {"SizeC": 4, "ChannelNames": ["cells", "nuclei", "cell_boundaries", "nucleus_boundaries"]}
+        return None
+
+    mocker.patch(
+        "src.portal_visualization.builders.sprm_builders.get_ome_tiff_metadata",
+        side_effect=_sprm_ome_tiff_metadata,
+    )
     # Multi-image base builders (SeqFISH) read the channel count from the first image's OME-TIFF.
     mocker.patch("src.portal_visualization.builders.imaging_builders.get_ome_tiff_metadata", return_value={"SizeC": 3})
     # Mock read_metadata_from_url (SegmentationMaskBuilder fetches zarr metadata over HTTP)
@@ -1680,6 +1693,40 @@ def test_sprm_builds_when_zarr_store_unavailable(mocker):
 
 # requires_full: imports sprm_builders, whose module-level `import numpy` is absent in the thin install.
 @pytest.mark.requires_full
+def test_sprm_segmentation_channels_from_bitmask():
+    """Each bitmask channel becomes its own segmentation layer; the cell mask joins the AnnData cells
+    (obsType 'cell', cell-set coloring) while the rest render in their own channel color. Missing/absent
+    channel names fall back to index-named channels."""
+    from src.portal_visualization.builders.sprm_builders import SPRMAnnDataViewConfBuilder
+
+    builder = SPRMAnnDataViewConfBuilder(
+        {"uuid": "u", "status": "QA", "files": []},
+        "token",
+        "https://example.com",
+        base_name="reg1",
+        image_name="reg1_expr",
+        mask_name="reg1_mask",
+        imaging_path="expr",
+        mask_path="mask",
+    )
+    named = builder._build_segmentation_channels(
+        {"SizeC": 4, "ChannelNames": ["cells", "nuclei", "cell_boundaries", "nucleus_boundaries"]}
+    )
+    # Cell mask keeps obsType "cell" (AnnData join); the rest are humanized for the layer-controller label.
+    assert [c["obsType"] for c in named] == ["cell", "Nuclei", "Cell Boundaries", "Nucleus Boundaries"]
+    assert named[0]["obsColorEncoding"] == "cellSetSelection"
+    assert all(c["obsColorEncoding"] == "spatialChannelColor" for c in named[1:])
+    assert all(c["spatialChannelVisible"] and c["spatialSegmentationFilled"] for c in named)
+
+    # No channel names -> index-named fallbacks, none treated as the cell mask; None -> single channel.
+    assert [c["obsType"] for c in builder._build_segmentation_channels({"SizeC": 2})] == [
+        "Segmentation-0",
+        "Segmentation-1",
+    ]
+    assert builder._build_segmentation_channels(None) == builder._build_segmentation_channels({"SizeC": 1})
+
+
+@pytest.mark.requires_full
 def test_multiregion_sprm_preserves_region_order(mocker):
     """Regions build concurrently (ThreadPoolExecutor), but the aggregated config list must stay in
     sorted region order regardless of which thread finishes first — else per-region views get shuffled."""
@@ -2177,6 +2224,7 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
         marker=None,
         n_obs=150_000,
         channel_indices=list(range(6)),
+        segmentation_channels=builder._build_segmentation_channels({"SizeC": 2, "ChannelNames": ["cells", "nuclei"]}),
         embedding_name=UMAP_EMBEDDING[1],
         prioritized_selection=prioritized_selection,
         description_text=description_text,
@@ -2187,9 +2235,24 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
     layout_str = json.dumps(conf["layout"])
     assert "heatmap" not in layout_str.lower()
     assert "spatialBeta" in layout_str
+    # Every mask channel becomes its own segmentation layer (obsType per channel) -- not just the cell
+    # mask -- so the nucleus/boundary masks are no longer dropped from the config.
+    obs_types = list(conf["coordinationSpace"].get("obsType", {}).values())
+    assert "cell" in obs_types
+    assert "Nuclei" in obs_types
     assert "layerControllerBeta" in layout_str
     assert conf["coordinationSpace"]["obsSetSelection"]["A"] == prioritized_selection
     assert conf["coordinationSpace"]["embeddingType"]["A"] == "UMAP"
+    # Gene/cell-set selection must recolor both the scatterplot and the spatial cells: the scatterplot,
+    # feature list, cell-set list, and the cell segmentation channel share one obsColorEncoding scope.
+    scopes = {v["component"]: v["coordinationScopes"] for v in conf["layout"]}
+    shared_oce = scopes["scatterplot"]["obsColorEncoding"]
+    assert scopes["featureList"]["obsColorEncoding"] == shared_oce
+    assert scopes["obsSets"]["obsColorEncoding"] == shared_oce
+    assert scopes["featureList"]["featureSelection"] == scopes["scatterplot"]["featureSelection"]
+    seg_key = next(k for k in conf["coordinationSpace"]["metaCoordinationScopesBy"] if "obsSegmentations" in k)
+    seg_oce = conf["coordinationSpace"]["metaCoordinationScopesBy"][seg_key]["segmentationChannel"]["obsColorEncoding"]
+    assert shared_oce in seg_oce.values()  # cell mask follows the same encoding
     # First 6 image channels, each with its distinct color.
     channel_colors = list(conf["coordinationSpace"].get("spatialChannelColor", {}).values())
     for color in IMAGE_CHANNEL_COLORS:
@@ -2197,7 +2260,9 @@ def test_sprm_anndata_heatmap_gate_and_prioritized_cell_set():
 
     # Small dataset: heatmap present.
     vc2, dataset2 = builder._create_vitessce_config(name="r1", dataset_name="SPRM")
-    builder._setup_view_config_raster_cellsets_expression_segmentation(vc2, dataset2, marker=None, n_obs=5)
+    builder._setup_view_config_raster_cellsets_expression_segmentation(
+        vc2, dataset2, marker=None, n_obs=5, segmentation_channels=builder._build_segmentation_channels(None)
+    )
     assert "heatmap" in json.dumps(vc2.to_dict()["layout"]).lower()
 
 

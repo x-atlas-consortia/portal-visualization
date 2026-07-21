@@ -269,6 +269,34 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         remaining = [i for i in range(size_c) if i not in seg_indices]
         return (seg_indices + remaining)[:num_channels]
 
+    def _build_segmentation_channels(self, bitmask_metadata):
+        """One segmentation channel per bitmask channel, mirroring the front-end's
+        obsTypesFromChannelNames auto-init so every mask -- for CODEX: cells, nuclei, cell_boundaries,
+        nucleus_boundaries -- is listed and toggleable, not just the cell mask. The cell mask keeps
+        obsType "cell" so it colors by the selected cell set (joining the AnnData cells); the others
+        render in their own channel color. Their obsType doubles as the layer-controller label, so
+        humanize the raw channel name (e.g. "cell_boundaries" -> "Cell Boundaries"); Vitessce only
+        capitalizes the first character, so it would otherwise show the snake_case name verbatim.
+        Falls back to a single channel when the mask (or the mocked metadata) exposes no channel names."""
+        names = (bitmask_metadata or {}).get("ChannelNames") or []
+        size_c = (bitmask_metadata or {}).get("SizeC") or 1
+        channels = []
+        for c in range(min(size_c, MAX_IMAGE_CHANNELS)):
+            name = names[c] if c < len(names) and names[c] else f"segmentation-{c}"
+            is_cell = name.lower() in ("cell", "cells")
+            channels.append(
+                {
+                    "spatialTargetC": c,
+                    "obsType": "cell" if is_cell else name.replace("_", " ").title(),
+                    "spatialChannelColor": IMAGE_CHANNEL_COLORS[c],
+                    "spatialChannelVisible": True,
+                    "spatialChannelOpacity": 1.0,
+                    "spatialSegmentationFilled": True,
+                    "obsColorEncoding": "cellSetSelection" if is_cell else "spatialChannelColor",
+                }
+            )
+        return channels
+
     def _build_description(self, image_metadata, n_obs):
         """Summary text for the description view: OME-TIFF header info plus the cell count."""
         lines = [self._image_name]
@@ -387,6 +415,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
             marker,
             n_obs=n_obs,
             channel_indices=channel_indices,
+            segmentation_channels=self._build_segmentation_channels(bitmask_metadata),
             embedding_name=embedding_name,
             prioritized_selection=prioritized_selection,
             description_text=self._build_description(image_metadata, n_obs),
@@ -400,6 +429,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
         marker,
         n_obs=0,
         channel_indices=(0,),
+        segmentation_channels=None,
         embedding_name="t-SNE",
         prioritized_selection=None,
         description_text="",
@@ -429,25 +459,35 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
 
         vc.link_views(views, [CoordinationType.OBS_TYPE], ["cell"])
 
-        if marker:
-            vc.link_views(
-                views,
-                [CoordinationType.FEATURE_SELECTION, CoordinationType.OBS_COLOR_ENCODING],
-                [[marker], "geneSelection"],
-            )
-        else:
-            # Color cells (scatterplot + segmentation) by the selected cell set.
-            [obs_color_encoding] = vc.add_coordination(CoordinationType.OBS_COLOR_ENCODING)
-            obs_color_encoding.set_value("cellSetSelection")
-            for view in (spatial, scatterplot, cell_sets):
-                view.use_coordination(obs_color_encoding)
-            # Preselect/color by the embedding's matching clustering (UMAP if present, else t-SNE),
-            # enumerating each cluster ID so the whole clustering is selected initially.
-            if prioritized_selection:
-                [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
-                obs_set_selection.set_value(prioritized_selection)
-                for view in (spatial, scatterplot, cell_sets):
-                    view.use_coordination(obs_set_selection)
+        # One shared cell-coloring coordination, referenced by the scatterplot, the antigen (feature)
+        # list, the cell-set list, and the cell segmentation channel. Selecting a gene in the feature
+        # list sets obsColorEncoding=geneSelection + featureSelection; selecting a cell set sets
+        # obsColorEncoding=cellSetSelection + obsSetSelection -- all on the SAME scopes, so the
+        # scatterplot and the spatial (segmentation) cells recolor together either way.
+        [obs_color_encoding] = vc.add_coordination(CoordinationType.OBS_COLOR_ENCODING)
+        [feature_selection] = vc.add_coordination(CoordinationType.FEATURE_SELECTION)
+        [obs_set_selection] = vc.add_coordination(CoordinationType.OBS_SET_SELECTION)
+        obs_color_encoding.set_value("geneSelection" if marker else "cellSetSelection")
+        feature_selection.set_value([marker] if marker else None)
+        # Preselect the embedding's matching clustering (UMAP if present, else t-SNE) when available.
+        obs_set_selection.set_value(prioritized_selection)
+
+        scatterplot.use_coordination(obs_color_encoding, feature_selection, obs_set_selection)
+        spatial.use_coordination(obs_color_encoding, feature_selection, obs_set_selection)
+        cell_sets.use_coordination(obs_color_encoding, obs_set_selection)
+        gene_list.use_coordination(obs_color_encoding, feature_selection)
+        if include_heatmap:
+            heatmap.use_coordination(feature_selection)
+
+        # Route the cell mask's coloring through the same shared scopes (instead of a fixed
+        # cellSetSelection) so the spatial segmentation follows the scatterplot/list selection. The
+        # other masks (nuclei, boundaries) keep their static spatialChannelColor -- they have no
+        # per-cell data to color by.
+        for channel in segmentation_channels or []:
+            if channel.get("obsType") == "cell":
+                channel["obsColorEncoding"] = obs_color_encoding
+                channel["featureSelection"] = feature_selection
+                channel["obsSetSelection"] = obs_set_selection
 
         # Wire the image and segmentation layers into the beta views. The beta spatial model does not
         # auto-discover channels, so each channel is listed explicitly (an empty/partial channel list
@@ -460,6 +500,10 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                 "spatialChannelColor": IMAGE_CHANNEL_COLORS[position],
                 "spatialChannelVisible": True,
                 "spatialChannelOpacity": 1.0,
+                # Declare the contrast window per channel (None -> Vitessce auto-computes it). Without
+                # it there is no per-channel window scope, so all channels share one and their min/max
+                # sliders move together.
+                "spatialChannelWindow": None,
             }
             for position, channel in enumerate(channel_indices)
         ]
@@ -492,20 +536,7 @@ class SPRMAnnDataViewConfBuilder(SPRMViewConfBuilder):
                             "fileUid": "segmentation-mask",
                             "spatialLayerVisible": True,
                             "spatialLayerOpacity": 1.0,
-                            "segmentationChannel": CL(
-                                [
-                                    {
-                                        # ponytail: channel 0 assumed to be the cell mask; obsType "cell"
-                                        # joins it to the AnnData cells so it colors by the selected cell set.
-                                        "spatialTargetC": 0,
-                                        "obsType": "cell",
-                                        "spatialChannelOpacity": 1.0,
-                                        "spatialChannelVisible": True,
-                                        "obsColorEncoding": "cellSetSelection",
-                                        "spatialSegmentationFilled": True,
-                                    }
-                                ]
-                            ),
+                            "segmentationChannel": CL(segmentation_channels),
                         }
                     ]
                 )
