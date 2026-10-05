@@ -1,3 +1,4 @@
+import http.cookiejar
 import json
 import traceback
 from collections import namedtuple
@@ -11,6 +12,7 @@ from werkzeug.exceptions import HTTPException
 
 from .builder_factory import get_view_config_builder
 from .builders.base_builders import ConfCells
+from .constants import REQUEST_TIMEOUT
 from .utils import files_from_response
 
 Entity = namedtuple("Entity", ["uuid", "type", "name"], defaults=["TODO: name"])
@@ -97,27 +99,40 @@ def _paginate_search_after(request_fn, query, description, max_pages=1000):
     return all_hits
 
 
+# One pooled session per process, so calls reuse TCP+TLS connections instead of reconnecting each
+# time. Every request thread shares it, so per-user state must never be set on it: Authorization
+# goes on each call, and cookies are blocked so nothing an upstream sets (e.g. an ALB stickiness
+# cookie) is replayed on other users' requests.
+http_session = requests.Session()
+http_session.cookies.set_policy(http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+
+# Upstream statuses re-raised as the same Flask error rather than surfacing as a 500.
+# 400/404: the same 404 page whether it's a missing route in portal-ui or a missing entity in the API.
+# 401: Globus credentials that have expired but are still in the Flask session.
+# 502/503/504: the upstream, or the API Gateway in front of it, failed or timed out.
+PASSTHROUGH_STATUSES = {400, 401, 404, 502, 503, 504}
+
+
 def _handle_request(url, headers=None, body_json=None):
     try:
         response = (
-            requests.post(url, headers=headers, json=body_json) if body_json else requests.get(url, headers=headers)
+            http_session.post(url, headers=headers, json=body_json, timeout=REQUEST_TIMEOUT)
+            if body_json
+            else http_session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         )
-    except requests.exceptions.ConnectTimeout as error:  # pragma: no cover
-        current_app.logger.error(error)
+    # Timeout first: ConnectTimeout is also a ConnectionError.
+    except requests.exceptions.Timeout as error:
+        current_app.logger.error(f"Timed out requesting {url}: {error}")
         abort(504)
+    except requests.exceptions.ConnectionError as error:
+        current_app.logger.error(f"Could not connect to {url}: {error}")
+        abort(502)
     try:
         response.raise_for_status()
-    except requests.exceptions.HTTPError as error:  # pragma: no cover
-        current_app.logger.error(error.response.text)
+    except requests.exceptions.HTTPError as error:
         status = error.response.status_code
-        if status in [400, 404]:
-            # The same 404 page will be returned,
-            # whether it's a missing route in portal-ui,
-            # or a missing entity in the API.
-            abort(status)
-        if status in [401]:
-            # I believe we have 401 errors when the globus credentials
-            # have expired, but are still in the flask session.
+        current_app.logger.error(f"{status} from {url}: {error.response.text}")
+        if status in PASSTHROUGH_STATUSES:
             abort(status)
         raise
     return response
@@ -153,12 +168,7 @@ class ApiClient:
         headers = {"Authorization": "Bearer " + self.groups_token} if self.groups_token else {}
         return headers
 
-    def _clean_headers(self, headers):
-        if "Authorization" in headers:
-            headers["Authorization"] = "REDACTED"
-        return headers
-
-    def _request(self, url, body_json=None):
+    def request(self, url, body_json=None):
         """
         Makes request to HuBMAP APIs behind API Gateway (Search, Entity, UUID).
         """
@@ -178,7 +188,7 @@ class ApiClient:
             "_source": ["empty-returns-everything"],
         }
         hits = _paginate_search_after(
-            lambda q: self._request(self.elasticsearch_url, body_json=q),
+            lambda q: self.request(self.elasticsearch_url, body_json=q),
             query,
             description="datasets",
         )
@@ -222,7 +232,7 @@ class ApiClient:
             },
         }
         hits = _paginate_search_after(
-            lambda q: self._request(self.elasticsearch_url, body_json=q),
+            lambda q: self.request(self.elasticsearch_url, body_json=q),
             query,
             description=plural_lc_entity_type,
         )
@@ -251,7 +261,7 @@ class ApiClient:
         if source_exclude:
             query["_source"] = {"exclude": list(source_exclude)}
 
-        response_json = self._request(self.elasticsearch_url, body_json=query)
+        response_json = self.request(self.elasticsearch_url, body_json=query)
 
         hits = _get_hits(response_json)
         return _get_entity_from_hits(hits, has_token=self.groups_token, uuid=uuid, hbm_id=hbm_id)
@@ -259,7 +269,7 @@ class ApiClient:
     def get_latest_entity_uuid(self, uuid, type):
         lowercase_type = type.lower()
         route = f"/{lowercase_type}s/{uuid}/revisions"
-        response_json = self._request(self.entity_api_endpoint + route)
+        response_json = self.request(self.entity_api_endpoint + route)
         return _get_latest_uuid(response_json)
 
     def get_files(self, uuids):
@@ -268,7 +278,7 @@ class ApiClient:
             "query": {"bool": {"must": [{"ids": {"values": uuids}}]}},
             "_source": ["files.rel_path"],
         }
-        response_json = self._request(self.elasticsearch_url, body_json=query)
+        response_json = self.request(self.elasticsearch_url, body_json=query)
         return files_from_response(response_json)
 
     def get_vitessce_conf_cells_and_lifted_uuid(self, entity, marker=None, wrap_error=True, parent=None, minimal=False):
@@ -338,12 +348,7 @@ class ApiClient:
         return VitessceConfLiftedUUID(vitessce_conf=vitessce_conf, vis_lifted_uuid=vis_lifted_uuid)
 
     def _file_request(self, url):
-        headers = {"Authorization": "Bearer " + self.groups_token} if self.groups_token else {}
-
-        if self.groups_token:
-            url += f"?token={self.groups_token}"
-
-        return _handle_request(url, headers).text
+        return _handle_request(url, self._get_headers()).text
 
     def get_descendant_to_lift(self, uuid, is_publication=False):
         """
@@ -372,7 +377,7 @@ class ApiClient:
             # lists can go -- everything a builder reads (files, metadata, hints) must stay.
             "_source": {"exclude": HEAVY_RELATIVE_FIELDS},
         }
-        response_json = self._request(
+        response_json = self.request(
             self.elasticsearch_url,
             body_json=query,
         )
@@ -412,7 +417,7 @@ class ApiClient:
 
     # Helper for making requests to the UBKG API
     def _get_ubkg(self, path):
-        return self._request(f"{self.ubkg_endpoint}/{path}")
+        return self.request(f"{self.ubkg_endpoint}/{path}")
 
     # Retrieves field descriptions from the UBKG API
     def get_metadata_descriptions(self):

@@ -18,3 +18,8 @@ MAX_OBS_FOR_HEATMAP = 125_000
 # the back-end's scraping filter, so the config builder's traffic can be whitelisted:
 # ~*(?i)(aiohttp|python-httpx|python-requests|Python-urllib)
 PORTAL_VIS_USER_AGENT = "portal-visualization-config-builder"
+
+# (connect, read) seconds for server-side requests. The read timeout bounds the gap between bytes,
+# not the whole download. 30s sits just past the API Gateway's 29s cap, so gateway-fronted APIs
+# answer 504 themselves first; this only fires for hosts with no cap (assets, S3).
+REQUEST_TIMEOUT = (5, 30)

@@ -20,7 +20,7 @@ from vitessce import (
     CoordinationLevel as CL,
 )
 
-from ..constants import base_image_dirs
+from ..constants import REQUEST_TIMEOUT, base_image_dirs
 from ..paths import (
     GEOMX_DIR,
     IMAGE_METADATA_DIR,
@@ -242,7 +242,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
             request_init = with_config_builder_user_agent(self._get_request_init())
 
             if self._is_zarr_zip:
-                response = requests.get(area_zarr_url, **request_init)
+                response = requests.get(area_zarr_url, **request_init, timeout=REQUEST_TIMEOUT)
                 if response.status_code != 200:
                     logger.warning("Failed to fetch AOI zarr zip: %s", response.status_code)
                     return
@@ -254,7 +254,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
                 zarray_path = f"{parsed.path}/obs/segment/categories/.zarray"
                 zarray_url = urlunparse(parsed._replace(path=zarray_path))
-                response = requests.get(zarray_url, **request_init)
+                response = requests.get(zarray_url, **request_init, timeout=REQUEST_TIMEOUT)
                 if response.status_code != 200:
                     logger.warning("Failed to fetch segment categories .zarray: %s", response.status_code)
                     return
@@ -262,7 +262,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
                 chunk_path = f"{parsed.path}/obs/segment/categories/0"
                 chunk_url = urlunparse(parsed._replace(path=chunk_path))
-                chunk_response = requests.get(chunk_url, **request_init)
+                chunk_response = requests.get(chunk_url, **request_init, timeout=REQUEST_TIMEOUT)
                 if chunk_response.status_code != 200:
                     logger.warning("Failed to fetch segment categories chunk: %s", chunk_response.status_code)
                     self.seg_channel_count = zarray_data["shape"][0]
