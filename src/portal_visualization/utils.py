@@ -14,7 +14,7 @@ from fsspec.implementations.zip import ZipFileSystem
 from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
-from .constants import PORTAL_VIS_USER_AGENT, image_units
+from .constants import PORTAL_VIS_USER_AGENT, REQUEST_TIMEOUT, image_units
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def get_image_metadata(self, img_url):
 
     meta_data = None
     request_init = with_config_builder_user_agent(self._get_request_init())
-    response = requests.get(img_url, **request_init)
+    response = requests.get(img_url, **request_init, timeout=REQUEST_TIMEOUT)
     if response.status_code == 200:  # pragma: no cover
         data = response.json()
         if isinstance(data, dict) and "PhysicalSizeX" in data and "PhysicalSizeUnitX" in data:

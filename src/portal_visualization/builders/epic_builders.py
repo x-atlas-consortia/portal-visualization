@@ -11,6 +11,7 @@ from vitessce import (
 )
 from vitessce import CoordinationLevel as CL
 
+from ..constants import REQUEST_TIMEOUT
 from ..paths import (
     IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
@@ -207,7 +208,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         mask_names = []
         url = f"{self.zarr_store_url()}/metadata.json"
         request_init = with_config_builder_user_agent(self._get_request_init())
-        response = get(url, **request_init)
+        response = get(url, **request_init, timeout=REQUEST_TIMEOUT)
         if response.status_code == 200:
             data = response.json()
             if isinstance(data, dict) and "mask_names" in data:

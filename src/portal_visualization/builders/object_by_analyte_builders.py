@@ -4,7 +4,7 @@ from math import ceil
 from vitessce import AnnDataWrapper
 from vitessce import Component as cm
 
-from ..constants import MAX_OBS_FOR_HEATMAP
+from ..constants import MAX_OBS_FOR_HEATMAP, REQUEST_TIMEOUT
 from ..utils import get_conf_cells, read_zip_zarr, with_config_builder_user_agent
 from .base_builders import ViewConfBuilder
 
@@ -84,7 +84,9 @@ class ObjectByAnalyteConfBuilder(ViewConfBuilder):
                 url = super()._build_assets_url(file)
                 import requests
 
-                resp = requests.get(url, **with_config_builder_user_agent(self._get_request_init()))
+                resp = requests.get(
+                    url, **with_config_builder_user_agent(self._get_request_init()), timeout=REQUEST_TIMEOUT
+                )
                 resp.raise_for_status()
                 json = resp.json()
                 if json:

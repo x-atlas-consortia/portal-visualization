@@ -3,10 +3,13 @@ import json
 import pytest
 
 try:
+    import requests
     from flask import Flask
+    from werkzeug.exceptions import BadGateway, GatewayTimeout, ServiceUnavailable
 
     from portal_visualization.builders.base_builders import ConfCells
-    from src.portal_visualization.client import ApiClient, _create_vitessce_error
+    from src.portal_visualization.client import ApiClient, _create_vitessce_error, _handle_request, http_session
+    from src.portal_visualization.constants import REQUEST_TIMEOUT
 
     FULL_DEPS_AVAILABLE = True
 except ImportError:
@@ -78,10 +81,10 @@ def mock_get_s3_json_file(path, **kwargs):
 
 
 def test_s3_redirect(mocker):
-    mocker.patch("requests.post", side_effect=mock_post_303)
-    mocker.patch("requests.get", side_effect=mock_get_s3_json_file)
+    mocker.patch("requests.Session.post", side_effect=mock_post_303)
+    mocker.patch("requests.Session.get", side_effect=mock_get_s3_json_file)
     api_client = ApiClient()
-    response = api_client._request("search-api-url", body_json={"query": {}})
+    response = api_client.request("search-api-url", body_json={"query": {}})
     assert response == mock_es
 
 
@@ -101,7 +104,7 @@ def mock_es_post(path, **kwargs):
 
 
 def test_get_descendant_to_lift(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
     with app.app_context():
         api_client = ApiClient()
         descendant = api_client.get_descendant_to_lift("uuid123")
@@ -124,7 +127,7 @@ def mock_es_post_no_hits(path, **kwargs):
 
 
 def test_get_descendant_to_lift_error(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post_no_hits)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post_no_hits)
     with app.app_context():
         api_client = ApiClient()
         descendant = api_client.get_descendant_to_lift("uuid123")
@@ -139,7 +142,7 @@ def test_get_descendant_to_lift_status_filter_includes_approval(app, mocker):
         captured["body"] = kwargs.get("json")
         return mock_es_post(path, **kwargs)
 
-    mocker.patch("requests.post", side_effect=side_effect)
+    mocker.patch("requests.Session.post", side_effect=side_effect)
     with app.app_context():
         api_client = ApiClient()
         api_client.get_descendant_to_lift("uuid123")
@@ -152,24 +155,41 @@ def test_get_descendant_to_lift_status_filter_includes_approval(app, mocker):
     assert set(status_terms) == {"QA", "Approval", "Published"}
 
 
-def test_clean_headers(app):
-    test_headers = {
-        "Authorization": "Bearer token",
-        "Content-Type": "application/json",
-        "X-Test": "test",
-    }
-    with app.app_context():
-        api_client = ApiClient()
-        cleaned_headers = api_client._clean_headers(test_headers)
-        assert cleaned_headers == {
-            "Authorization": "REDACTED",
-            "Content-Type": "application/json",
-            "X-Test": "test",
-        }
+def _error_response(status):
+    response = requests.Response()
+    response.status_code = status
+    response._content = b"upstream error body"
+    return response
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (requests.exceptions.ReadTimeout(), GatewayTimeout),
+        (requests.exceptions.ConnectTimeout(), GatewayTimeout),
+        (requests.exceptions.ConnectionError(), BadGateway),
+        (_error_response(504), GatewayTimeout),
+        (_error_response(503), ServiceUnavailable),
+        (_error_response(500), requests.exceptions.HTTPError),
+    ],
+)
+def test_handle_request_upstream_failures(app, mocker, outcome, expected):
+    get = mocker.patch("requests.Session.get", side_effect=[outcome])
+    with app.app_context(), pytest.raises(expected):
+        _handle_request("upstream-url")
+    assert get.call_args.kwargs["timeout"] == REQUEST_TIMEOUT
+
+
+def test_session_rejects_upstream_cookies():
+    # The session is shared by every user's requests, so it must not remember cookies.
+    request = requests.cookies.MockRequest(requests.Request("GET", "https://example.org/").prepare())
+    cookie = requests.cookies.create_cookie("AWSALB", "sticky", domain="example.org")
+    http_session.cookies.set_cookie_if_ok(cookie, request)
+    assert not http_session.cookies
 
 
 def test_get_all_dataset_uuids(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
     with app.app_context():
         api_client = ApiClient()
         uuids = api_client.get_all_dataset_uuids()
@@ -217,7 +237,7 @@ def _mock_es_post_paginated():
 
 
 def test_get_dataset_uuids_more_than_10k(app, mocker):
-    mocker.patch("requests.post", side_effect=_mock_es_post_paginated())
+    mocker.patch("requests.Session.post", side_effect=_mock_es_post_paginated())
     with app.app_context():
         api_client = ApiClient()
         uuids = api_client.get_all_dataset_uuids()
@@ -228,7 +248,7 @@ def test_get_dataset_uuids_more_than_10k(app, mocker):
 
 @pytest.mark.parametrize("plural_lc_entity_type", ["datasets", "samples", "donors"])
 def test_get_entities(app, mocker, plural_lc_entity_type):
-    mocker.patch("requests.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
     with app.app_context():
         api_client = ApiClient()
         entities = api_client.get_entities(plural_lc_entity_type)
@@ -236,7 +256,7 @@ def test_get_entities(app, mocker, plural_lc_entity_type):
 
 
 def test_get_entities_paginates(app, mocker):
-    mocker.patch("requests.post", side_effect=_mock_es_post_paginated())
+    mocker.patch("requests.Session.post", side_effect=_mock_es_post_paginated())
     with app.app_context():
         api_client = ApiClient()
         entities = api_client.get_entities("datasets")
@@ -266,7 +286,7 @@ def test_get_entities_pagination_empty_page(app, mocker):
 
         return MockResponse()
 
-    mocker.patch("requests.post", side_effect=side_effect)
+    mocker.patch("requests.Session.post", side_effect=side_effect)
     with app.app_context():
         api_client = ApiClient()
         entities = api_client.get_entities("datasets")
@@ -274,7 +294,7 @@ def test_get_entities_pagination_empty_page(app, mocker):
 
 
 def test_get_entities_with_post_filter_extra(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
     with app.app_context():
         api_client = ApiClient()
         entities = api_client.get_entities(
@@ -304,7 +324,7 @@ def test_get_entities_post_filter_extra_merges_bool_clause(app, mocker):
 
         return MockResponse()
 
-    mocker.patch("requests.post", side_effect=side_effect)
+    mocker.patch("requests.Session.post", side_effect=side_effect)
     with app.app_context():
         api_client = ApiClient()
         api_client.get_entities(
@@ -350,7 +370,7 @@ def test_get_entities_pagination_safety_limit(app, mocker):
 
         return MockResponse()
 
-    mocker.patch("requests.post", side_effect=side_effect)
+    mocker.patch("requests.Session.post", side_effect=side_effect)
     with app.app_context():
         api_client = ApiClient()
         with pytest.raises(Exception, match="Pagination safety limit"):
@@ -359,7 +379,7 @@ def test_get_entities_pagination_safety_limit(app, mocker):
 
 @pytest.mark.parametrize("params", [{"uuid": "uuid"}, {"hbm_id": "hubmap_id"}])
 def test_get_entity(app, mocker, params):
-    mocker.patch("requests.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
     with app.app_context():
         api_client = ApiClient()
         entity = api_client.get_entity(**params)
@@ -378,7 +398,7 @@ def test_get_entity_source_exclude(app, mocker):
         bodies.append(kwargs.get("json"))
         return mock_es_post(path, **kwargs)
 
-    mocker.patch("requests.post", side_effect=capture)
+    mocker.patch("requests.Session.post", side_effect=capture)
     with app.app_context():
         api_client = ApiClient()
         api_client.get_entity(uuid="uuid")
@@ -402,7 +422,7 @@ def test_get_descendant_to_lift_excludes_relatives(app, mocker):
         bodies.append(kwargs.get("json"))
         return mock_es_post(path, **kwargs)
 
-    mocker.patch("requests.post", side_effect=capture)
+    mocker.patch("requests.Session.post", side_effect=capture)
     with app.app_context():
         api_client = ApiClient()
         api_client.get_descendant_to_lift("uuid123")
@@ -448,7 +468,7 @@ def mock_get_revisions(path, **kwargs):
     ],
 )
 def test_get_latest_entity_uuid(app, mocker, params):
-    mocker.patch("requests.get", side_effect=mock_get_revisions)
+    mocker.patch("requests.Session.get", side_effect=mock_get_revisions)
     with app.app_context():
         api_client = ApiClient(entity_api_endpoint="entity-api-url")
         entity_uuid = api_client.get_latest_entity_uuid(**params)
@@ -481,7 +501,7 @@ def mock_files_response(path, **kwargs):
 
 
 def test_get_files(app, mocker):
-    mocker.patch("requests.post", side_effect=mock_files_response)
+    mocker.patch("requests.Session.post", side_effect=mock_files_response)
     with app.app_context():
         api_client = ApiClient()
         files = api_client.get_files(["1234", "5678"])
@@ -499,7 +519,7 @@ related_entity_no_files_error = _create_vitessce_error(
         (
             # No metadata in descendant
             {"uuid": "12345"},
-            "requests.post",
+            "requests.Session.post",
             mock_es_post,
             related_entity_no_files_error,
             None,
@@ -507,7 +527,7 @@ related_entity_no_files_error = _create_vitessce_error(
         (
             # No descendants, not marked as having a visualization, no files
             {"uuid": "12345"},
-            "requests.post",
+            "requests.Session.post",
             mock_es_post_no_hits,
             ConfCells(None, None),
             None,
@@ -542,8 +562,8 @@ def test_get_vitessce_conf_cells_and_lifted_uuid(
 
 @pytest.mark.parametrize("groups_token", [None, "token"])
 def test_get_publication_ancillary_json(app, mocker, groups_token):
-    mocker.patch("requests.post", side_effect=mock_es_post)
-    mocker.patch("requests.get", side_effect=mock_get_s3_json_file)
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.get", side_effect=mock_get_s3_json_file)
     with app.app_context():
         api_client = ApiClient(groups_token=groups_token)
         result = api_client.get_publication_ancillary_json({"uuid": "ABC123"})
@@ -552,7 +572,7 @@ def test_get_publication_ancillary_json(app, mocker, groups_token):
 
 
 def test_get_metadata_descriptions(app, mocker):
-    mocker.patch("requests.get", side_effect=mock_get_s3_json_file)
+    mocker.patch("requests.Session.get", side_effect=mock_get_s3_json_file)
     with app.app_context():
         api_client = ApiClient()
         metadata_descriptions = api_client.get_metadata_descriptions()
@@ -560,7 +580,7 @@ def test_get_metadata_descriptions(app, mocker):
 
 
 def test_get_metadata_field_types(app, mocker):
-    mocker.patch("requests.get", side_effect=mock_get_s3_json_file)
+    mocker.patch("requests.Session.get", side_effect=mock_get_s3_json_file)
     with app.app_context():
         api_client = ApiClient()
         metadata_types = api_client.get_metadata_field_types()
