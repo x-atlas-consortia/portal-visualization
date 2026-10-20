@@ -4,6 +4,7 @@ import pytest
 
 try:
     import requests
+    import urllib3
     from flask import Flask
     from werkzeug.exceptions import BadGateway, GatewayTimeout, ServiceUnavailable
 
@@ -168,6 +169,10 @@ def _error_response(status):
         (requests.exceptions.ReadTimeout(), GatewayTimeout),
         (requests.exceptions.ConnectTimeout(), GatewayTimeout),
         (requests.exceptions.ConnectionError(), BadGateway),
+        # How requests reports the upstream dropping the connection partway through the body.
+        (requests.exceptions.ChunkedEncodingError(), BadGateway),
+        # How requests reports a stall while downloading the body, after the headers arrived.
+        (requests.exceptions.ConnectionError(urllib3.exceptions.ReadTimeoutError(None, None, "")), GatewayTimeout),
         (_error_response(504), GatewayTimeout),
         (_error_response(503), ServiceUnavailable),
         (_error_response(500), requests.exceptions.HTTPError),

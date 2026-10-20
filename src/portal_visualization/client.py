@@ -5,6 +5,7 @@ from collections import namedtuple
 from dataclasses import dataclass
 
 import requests
+import urllib3
 
 # Flask is safe to import since hubmap_commons is a dependency
 from flask import abort, current_app
@@ -120,12 +121,19 @@ def _handle_request(url, headers=None, body_json=None):
             if body_json
             else http_session.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         )
-    # Timeout first: ConnectTimeout is also a ConnectionError.
-    except requests.exceptions.Timeout as error:
-        current_app.logger.error(f"Timed out requesting {url}: {error}")
-        abort(504)
-    except requests.exceptions.ConnectionError as error:
-        current_app.logger.error(f"Could not connect to {url}: {error}")
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        # The upstream dropped the connection partway through the body.
+        requests.exceptions.ChunkedEncodingError,
+    ) as error:
+        # A stall after the headers arrive, while the body downloads, is raised as
+        # ConnectionError(ReadTimeoutError) rather than ReadTimeout, so check the wrapped error too.
+        cause = error.args[0] if error.args else None
+        if isinstance(error, requests.exceptions.Timeout) or isinstance(cause, urllib3.exceptions.ReadTimeoutError):
+            current_app.logger.error(f"Timed out requesting {url}: {error}")
+            abort(504)
+        current_app.logger.error(f"Connection to {url} failed: {error}")
         abort(502)
     try:
         response.raise_for_status()
