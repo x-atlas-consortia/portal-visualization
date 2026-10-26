@@ -1,14 +1,8 @@
 """
-Data access abstractions for portal-visualization builders.
-
-This module provides common patterns for accessing external resources (Zarr stores,
-HTTP endpoints, image metadata) to reduce code duplication across builders and
-improve testability.
+Zarr store access shared by the portal-visualization builders.
 """
 
 import logging
-from abc import ABC, abstractmethod
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,44 +12,6 @@ try:
     _FULL_DEPS_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _FULL_DEPS_AVAILABLE = False
-
-
-class ResourceLoader(ABC):
-    """Abstract interface for loading external resources.
-
-    Allows builders to be tested without making real HTTP requests or file system access.
-    """
-
-    @abstractmethod
-    def load_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        """Load JSON from a URL.
-
-        Args:
-            url: The URL to load from
-            headers: Optional HTTP headers
-
-        Returns:
-            Parsed JSON as a dictionary
-        """
-        # pragma: no cover
-
-
-class HttpResourceLoader(ResourceLoader):
-    """Production resource loader using requests library."""
-
-    def load_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        """Load JSON from a URL using requests.
-
-        >>> # This is production code, tested via integration tests
-        >>> # Example usage:
-        >>> # loader = HttpResourceLoader()
-        >>> # data = loader.load_json("https://api.example.com/data.json")
-        """
-        import requests  # pragma: no cover
-
-        resp = requests.get(url, headers=headers)  # pragma: no cover
-        resp.raise_for_status()  # pragma: no cover
-        return resp.json()  # pragma: no cover
 
 
 class ZarrStoreAccessor:
@@ -121,88 +77,6 @@ class ZarrStoreAccessor:
             return read_zarr(zarr_url, request_init)
 
 
-class ImageMetadataRetriever:
-    """Handles retrieval and parsing of image metadata JSON files.
-
-    Centralizes the pattern of fetching metadata files and computing physical scales
-    that appears in imaging_builders.py and epic_builders.py.
-    """
-
-    def __init__(self, resource_loader: ResourceLoader):
-        """Initialize with a resource loader.
-
-        Args:
-            resource_loader: ResourceLoader instance for fetching JSON
-
-        >>> from unittest.mock import Mock
-        >>> loader = Mock(spec=ResourceLoader)
-        >>> retriever = ImageMetadataRetriever(loader)
-        >>> retriever.resource_loader is loader
-        True
-        """
-        self.resource_loader = resource_loader
-
-    def get_metadata(self, metadata_url: str) -> dict[str, Any] | None:
-        """Fetch image metadata from URL.
-
-        Args:
-            metadata_url: URL to metadata JSON file
-
-        Returns:
-            Metadata dictionary or None on error
-
-        >>> from unittest.mock import Mock
-        >>> loader = Mock()
-        >>> loader.load_json.return_value = {"PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "μm"}
-        >>> retriever = ImageMetadataRetriever(loader)
-        >>> metadata = retriever.get_metadata("https://example.com/metadata.json")
-        >>> metadata["PhysicalSizeX"]
-        0.5
-        """
-        try:
-            return self.resource_loader.load_json(metadata_url)
-        except Exception as e:  # pragma: no cover
-            logger.error("Error fetching metadata from %s: %s", metadata_url, e)
-            return None
-
-    def compute_scale(self, base_metadata: dict[str, Any] | None, overlay_metadata: dict[str, Any] | None) -> float:
-        """Compute scale factor between base and overlay images.
-
-        Args:
-            base_metadata: Metadata for base/reference image
-            overlay_metadata: Metadata for overlay/segmentation image
-
-        Returns:
-            Scale factor (overlay_pixel_size / base_pixel_size)
-
-        >>> from unittest.mock import Mock
-        >>> retriever = ImageMetadataRetriever(Mock())
-        >>> base = {"PhysicalSizeX": 1.0, "PhysicalSizeXUnit": "μm"}
-        >>> overlay = {"PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "μm"}
-        >>> retriever.compute_scale(base, overlay)
-        0.5
-        """
-        if not base_metadata or not overlay_metadata:
-            return 1.0
-
-        from .constants import image_units
-
-        base_size = base_metadata.get("PhysicalSizeX", 1.0)
-        base_unit = base_metadata.get("PhysicalSizeXUnit", "μm")
-
-        overlay_size = overlay_metadata.get("PhysicalSizeX", 1.0)
-        overlay_unit = overlay_metadata.get("PhysicalSizeXUnit", "μm")
-
-        # Convert to common unit (meters)
-        base_in_meters = base_size / image_units.get(base_unit, 1e6)
-        overlay_in_meters = overlay_size / image_units.get(overlay_unit, 1e6)
-
-        return overlay_in_meters / base_in_meters if base_in_meters != 0 else 1.0
-
-
-# Factory functions for creating standard accessors
-
-
 def create_zarr_accessor(builder_instance):
     """Create a ZarrStoreAccessor from a builder instance.
 
@@ -220,16 +94,3 @@ def create_zarr_accessor(builder_instance):
     return ZarrStoreAccessor(
         url_builder=builder_instance._build_assets_url, request_init_provider=builder_instance._get_request_init
     )
-
-
-def create_http_resource_loader():
-    """Create production HTTP resource loader.
-
-    Returns:
-        HttpResourceLoader instance
-
-    >>> loader = create_http_resource_loader()
-    >>> isinstance(loader, HttpResourceLoader)
-    True
-    """
-    return HttpResourceLoader()

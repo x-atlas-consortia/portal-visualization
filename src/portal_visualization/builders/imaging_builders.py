@@ -37,6 +37,7 @@ from ..utils import (
     get_image_metadata,
     get_image_scale,
     get_matches,
+    get_offsets_and_metadata_paths,
     get_ome_tiff_metadata,
     group_by_file_name,
     with_config_builder_user_agent,
@@ -93,23 +94,7 @@ class AbstractImagingViewConfBuilder(ViewConfBuilder):
 
         """
         img_url = self._build_assets_url(img_path)
-        return (
-            img_url,
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "offsets.json",
-                    re.sub(img_dir, OFFSETS_DIR, img_url),
-                )
-            ),
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "metadata.json",
-                    re.sub(img_dir, IMAGE_METADATA_DIR, img_url),
-                )
-            ),
-        )
+        return (img_url, *get_offsets_and_metadata_paths(img_url, img_dir))
 
     def _get_img_and_offset_url_seg(self, img_path, img_dir):
         """Create a url for the offsets and img for the EPICs base-image support datasets.
@@ -671,18 +656,8 @@ class Kaggle1SegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         img_path = found_images[0]
         base_img_url = self._build_support_url(support_entity, img_path)
 
-        offsets_path = re.sub(
-            r"ome\.tiff?",
-            "offsets.json",
-            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
-        )
+        offsets_path, metadata_path = get_offsets_and_metadata_paths(img_path)
         base_offsets_url = self._build_support_url(support_entity, offsets_path)
-
-        metadata_path = re.sub(
-            r"ome\.tiff?",
-            "metadata.json",
-            re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, img_path),
-        )
         base_metadata_url = self._build_support_url(support_entity, metadata_path)
 
         self.base_image_metadata = get_image_metadata(self, base_metadata_url)

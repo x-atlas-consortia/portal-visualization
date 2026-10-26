@@ -4,6 +4,7 @@ from itertools import groupby
 from pathlib import Path
 from unicodedata import normalize
 
+import aiohttp
 import fsspec
 import nbformat
 import requests
@@ -15,8 +16,20 @@ from vitessce import VitessceConfig
 
 from .builders.base_builders import ConfCells
 from .constants import PORTAL_VIS_USER_AGENT, REQUEST_TIMEOUT, image_units
+from .paths import IMAGE_METADATA_DIR, IMAGE_PYRAMID_DIR, OFFSETS_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def without_token(text):
+    """Redact the groups token from a URL, or from an error message that quotes one, before logging it.
+
+    >>> without_token("https://example.com/a.json?token=secret&x=1")
+    'https://example.com/a.json?token=REDACTED&x=1'
+    >>> without_token(ValueError("403, url='https://example.com/a.tif?token=secret'"))
+    "403, url='https://example.com/a.tif?token=REDACTED'"
+    """
+    return re.sub(r"([?&]token=)[^&\s'\"]+", r"\1REDACTED", str(text))
 
 
 def with_config_builder_user_agent(request_init):
@@ -38,8 +51,44 @@ def with_config_builder_user_agent(request_init):
     return request_init
 
 
+def _fsspec_client_kwargs(request_init):
+    """aiohttp session kwargs for fsspec reads: the config-builder User-Agent, plus the connect and
+    read timeouts the ``requests`` calls use. Without them aiohttp waits up to 5 minutes.
+
+    Kept apart from ``with_config_builder_user_agent``, whose result is also splatted into ``requests.get``.
+
+    >>> kwargs = _fsspec_client_kwargs(None)
+    >>> (kwargs["timeout"].sock_connect, kwargs["timeout"].sock_read) == REQUEST_TIMEOUT
+    True
+    """
+    connect, read = REQUEST_TIMEOUT
+    return {
+        **with_config_builder_user_agent(request_init),
+        "timeout": aiohttp.ClientTimeout(sock_connect=connect, sock_read=read),
+    }
+
+
 def get_matches(files, regex):
-    return list({match[0] for match in {re.search(regex, file) for file in files} if match})
+    """Matched substrings, deduplicated and sorted so callers taking the first pick the same file
+    in every process.
+
+    >>> get_matches(["b/x.tif", "a/x.tif", "a/x.tif", "c.txt"], r".*\\.tif$")
+    ['a/x.tif', 'b/x.tif']
+    """
+    return sorted({match[0] for match in {re.search(regex, file) for file in files} if match})
+
+
+def get_offsets_and_metadata_paths(img_path, img_dir=IMAGE_PYRAMID_DIR):
+    """Where portal-containers writes an image pyramid's offsets and metadata JSON: ``img_dir``
+    swapped for each output directory, and the ``ome.tif(f)`` extension for each JSON suffix.
+    Works on a relative path or a full URL.
+
+    >>> get_offsets_and_metadata_paths("ometiff-pyramids/a/b.ome.tif")
+    ('output_offsets/a/b.offsets.json', 'image_metadata/a/b.metadata.json')
+    """
+    offsets = re.sub(r"ome\.tiff?", "offsets.json", re.sub(img_dir, OFFSETS_DIR, img_path))
+    metadata = re.sub(r"ome\.tiff?", "metadata.json", re.sub(img_dir, IMAGE_METADATA_DIR, img_path))
+    return offsets, metadata
 
 
 def create_coordination_values(obs_type="cell", **kwargs):
@@ -151,7 +200,7 @@ def get_image_metadata(self, img_url):
         else:
             logger.warning("Image does not have metadata")
     else:
-        logger.warning("Failed to retrieve %s: %s - %s", img_url, response.status_code, response.reason)
+        logger.warning("Failed to retrieve %s: %s - %s", without_token(img_url), response.status_code, response.reason)
     return meta_data
 
 
@@ -184,7 +233,7 @@ def get_ome_tiff_metadata(url):
 
         # Send the config-builder User-Agent so these server-side range reads aren't throttled by the
         # assets back-end's scraping filter (the token, when present, rides in the URL query string).
-        source = fsspec.open(url, client_kwargs=with_config_builder_user_agent(None))
+        source = fsspec.open(url, client_kwargs=_fsspec_client_kwargs(None))
         with source.open() as f, tifffile.TiffFile(f) as tif:
             ome_xml = tif.ome_metadata
         if not ome_xml:
@@ -207,7 +256,7 @@ def get_ome_tiff_metadata(url):
             "PhysicalSizeUnitY": pixels.get("PhysicalSizeYUnit"),
         }
     except Exception as e:  # pragma: no cover
-        logger.warning("Could not read OME-TIFF metadata from %s: %s", url, e)
+        logger.warning("Could not read OME-TIFF metadata from %s: %s", without_token(url), without_token(e))
         return None
 
 
@@ -456,7 +505,7 @@ def read_zip_zarr(zarr_url, request_init):
     fs = _SafeZipFileSystem(
         fo=zarr_url,
         target_protocol="https",
-        target_options={"client_kwargs": with_config_builder_user_agent(request_init)},
+        target_options={"client_kwargs": _fsspec_client_kwargs(request_init)},
     )
     # zarr v3 needs an async-capable store; wrap the sync zip filesystem.
     store = zarr.storage.FsspecStore(AsyncFileSystemWrapper(fs, asynchronous=True), read_only=True)
@@ -512,6 +561,6 @@ def read_zarr(zarr_url, request_init):
     Returns:
         zarr.Group: Opened Zarr store.
     """
-    fs = _SafeHTTPFileSystem(asynchronous=True, client_kwargs=with_config_builder_user_agent(request_init))
+    fs = _SafeHTTPFileSystem(asynchronous=True, client_kwargs=_fsspec_client_kwargs(request_init))
     store = zarr.storage.FsspecStore(fs, path=zarr_url, read_only=True)
     return zarr.open_group(store, mode="r", use_consolidated=False)

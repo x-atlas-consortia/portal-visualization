@@ -72,7 +72,7 @@ All builders inherit from `ViewConfBuilder` in `builders/base_builders.py`. Core
 - `client.py` — `ApiClient` for portal-ui/search-api integration (Flask context)
 - `paths.py` — regex patterns for discovering data files in datasets
 - `utils.py` — image detection, zarr format detection, scale computation
-- `data_access.py` — abstractions for resource loading and zarr access
+- `data_access.py` — zarr store access shared by the builders
 - `view_layout.py` — layout configuration logic
 
 ## Key Constraints

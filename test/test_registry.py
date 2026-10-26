@@ -54,7 +54,7 @@ class TestRegistryExperimental:
         )
 
         # Line 74: Return False when forbidden hint present (line 64 check)
-        assert reg.matches(["is_image", "exclude_me"], None, False, False) is False
+        assert reg.matches(["is_image", "exclude_me"], None, False) is False
 
         # Test with assay type requirement
         reg = BuilderRegistration(
@@ -65,21 +65,9 @@ class TestRegistryExperimental:
         )
 
         # Line 70: Return False when assay_type doesn't match
-        assert reg.matches(["is_image"], "wrong_assay", False, False) is False
+        assert reg.matches(["is_image"], "wrong_assay", False) is False
         # Should match when correct
-        assert reg.matches(["is_image"], "CODEX", False, False) is True
-
-        # Test requires_epic check (line 76)
-        reg = BuilderRegistration(
-            builder_name="TestBuilder",
-            required_hints={"is_image"},
-            requires_epic=True,
-            priority=5,
-        )
-        # Should not match when no epic provided
-        assert reg.matches(["is_image"], None, False, False) is False
-        # Should match when epic provided
-        assert reg.matches(["is_image"], None, False, True) is True
+        assert reg.matches(["is_image"], "CODEX", False) is True
 
         # Test requires_parent check (line 74)
         reg = BuilderRegistration(
@@ -89,9 +77,9 @@ class TestRegistryExperimental:
             priority=5,
         )
         # Line 74: Return False when parent required but not provided
-        assert reg.matches(["is_image"], None, False, False, None) is False
+        assert reg.matches(["is_image"], None, False, None) is False
         # Should match when parent provided
-        assert reg.matches(["is_image"], None, True, False, None) is True
+        assert reg.matches(["is_image"], None, True, None) is True
 
         # Test parent_assay_types check (line 84)
         reg = BuilderRegistration(
@@ -101,9 +89,9 @@ class TestRegistryExperimental:
             priority=5,
         )
         # Line 84: Return False when parent_assay_type doesn't match
-        assert reg.matches(["is_image"], None, True, False, "wrong_type") is False
+        assert reg.matches(["is_image"], None, True, "wrong_type") is False
         # Should match when correct parent assay type
-        assert reg.matches(["is_image"], None, True, False, "SEQFISH") is True
+        assert reg.matches(["is_image"], None, True, "SEQFISH") is True
 
     def test_find_builder_returns_none_when_no_match(self):
         """Test BuilderRegistry.find_builder returns None when no matches."""
@@ -113,7 +101,7 @@ class TestRegistryExperimental:
         registry.register("OnlyForCodex", required_hints=["is_image"], assay_types={"CODEX"})
 
         # Line 159: Return None when no matches
-        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY", False, False, None)
+        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY", False, None)
         assert result is None
 
     def test_registry_parent_assay_type_fetching(self):
@@ -230,20 +218,6 @@ class TestRegistryExperimental:
         reason = next(r for r in diagnostics["non_matching_reasons"] if r["builder"] == "NeedsParent")
         assert any("requires parent" in r for r in reason["reasons"])
 
-    def test_get_match_diagnostics_requires_epic(self):
-        """Test get_match_diagnostics when EPIC is required but missing."""
-        from portal_visualization.builder_registry import BuilderRegistry
-
-        registry = BuilderRegistry()
-        registry.register("NeedsEpic", required_hints=["is_support"], requires_epic=True, priority=10)
-
-        # Line 258: Test requires_epic but has_epic=False
-        diagnostics = registry.get_match_diagnostics(["is_support"], None, has_epic=False)
-
-        assert diagnostics["selected"] is None
-        reason = next(r for r in diagnostics["non_matching_reasons"] if r["builder"] == "NeedsEpic")
-        assert any("EPIC UUID" in r for r in reason["reasons"])
-
     def test_format_no_match_message_with_match(self):
         """Test format_no_match_message when a builder matches."""
         from portal_visualization.builder_registry import BuilderRegistry
@@ -268,15 +242,3 @@ class TestRegistryExperimental:
         message = registry.format_no_match_message(["is_image"], None, has_parent=True, parent_assay_type="SEQFISH")
 
         assert "Parent assay type: SEQFISH" in message
-
-    def test_format_no_match_message_with_epic(self):
-        """Test format_no_match_message includes EPIC info when provided."""
-        from portal_visualization.builder_registry import BuilderRegistry
-
-        registry = BuilderRegistry()
-        # Don't register any builders to ensure no match
-
-        # Line 326: Test has_epic branch
-        message = registry.format_no_match_message(["is_support"], None, has_epic=True)
-
-        assert "Has EPIC UUID: True" in message

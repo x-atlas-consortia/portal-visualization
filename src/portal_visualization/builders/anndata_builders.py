@@ -193,17 +193,15 @@ class RNASeqAnnDataZarrViewConfBuilder(ViewConfBuilder):
                 hugo_categories_key = hugo_symbols.attrs.asdict()["categories"]
                 # Get the list of categories that the hugo_index_list's values map to
                 hugo_categories = z["var"][hugo_categories_key][:]
-                # Find the index of the user-provided marker gene in the list of hugo symbols
-                marker_index_in_categories = np.where(hugo_categories == marker)[0][0]
-                # If the user-provided gene's index is found, continue
-                if marker_index_in_categories >= 0:
+                # Find the index of the user-provided marker gene in the list of hugo symbols.
+                # A gene the dataset lacks keeps the raw marker rather than failing the whole viewer.
+                category_matches = np.where(hugo_categories == marker)[0]
+                if category_matches.size:
                     # Find index of HUGO pointer corresponding to marker gene
-                    marker_index = np.where(hugo_index_list == marker_index_in_categories)[0][0]
+                    marker_matches = np.where(hugo_index_list == category_matches[0])[0]
                     # If valid index is found, set the marker name to the corresponding Ensembl ID
-                    if marker_index >= 0:
-                        marker = ensembl_ids[marker_index]
-                    else:
-                        pass  # pragma: no cover
+                    if marker_matches.size:
+                        marker = ensembl_ids[marker_matches[0]]
             # Encoding Version 0.2.0
             # https://anndata.readthedocs.io/en/latest/fileformat-prose.html#categorical-arrays
             # Our pipeline currently does not use this encoding version

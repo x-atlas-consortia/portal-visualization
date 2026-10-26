@@ -21,7 +21,6 @@ class BuilderRegistration:
         parent_assay_types: Parent assay types this builder handles (None = any)
         priority: Selection priority when multiple builders match (higher = preferred)
         requires_parent: Whether this builder requires a parent entity
-        requires_epic: Whether this builder requires an EPIC UUID
     """
 
     builder_name: str
@@ -31,14 +30,12 @@ class BuilderRegistration:
     parent_assay_types: set[str] | None = None
     priority: int = 0
     requires_parent: bool = False
-    requires_epic: bool = False
 
     def matches(
         self,
         hints: list[str],
         assay_type: str | None,
         has_parent: bool,
-        has_epic: bool,
         parent_assay_type: str | None = None,
     ) -> bool:
         """Check if this builder matches the given criteria.
@@ -47,7 +44,6 @@ class BuilderRegistration:
             hints: List of vitessce-hints from entity
             assay_type: Assay type from entity
             has_parent: Whether a parent UUID was provided
-            has_epic: Whether an EPIC UUID was provided
             parent_assay_type: Assay type of the parent entity (if has_parent)
 
         Returns:
@@ -58,11 +54,11 @@ class BuilderRegistration:
         ...     required_hints={"is_image", "rna"},
         ...     forbidden_hints={"is_json"}
         ... )
-        >>> reg.matches(["is_image", "rna", "spatial"], None, False, False)
+        >>> reg.matches(["is_image", "rna", "spatial"], None, False)
         True
-        >>> reg.matches(["is_image", "rna", "is_json"], None, False, False)
+        >>> reg.matches(["is_image", "rna", "is_json"], None, False)
         False
-        >>> reg.matches(["is_image"], None, False, False)
+        >>> reg.matches(["is_image"], None, False)
         False
         """
         hint_set = set(hints)
@@ -83,11 +79,8 @@ class BuilderRegistration:
         if self.parent_assay_types is not None and parent_assay_type not in self.parent_assay_types:
             return False
 
-        # Check parent/epic requirements
-        if self.requires_parent and not has_parent:
-            return False
-
-        return not (self.requires_epic and not has_epic)
+        # Check parent requirement
+        return not (self.requires_parent and not has_parent)
 
 
 class BuilderRegistry:
@@ -102,7 +95,7 @@ class BuilderRegistry:
     ...     required_hints=["is_image"],
     ...     priority=10
     ... )
-    >>> match = registry.find_builder(["is_image", "rna"], None, False, False)
+    >>> match = registry.find_builder(["is_image", "rna"], None, False)
     >>> match
     'TestBuilder'
     """
@@ -119,7 +112,6 @@ class BuilderRegistry:
         parent_assay_types: list[str] | None = None,
         priority: int = 0,
         requires_parent: bool = False,
-        requires_epic: bool = False,
     ) -> None:
         """Register a builder.
 
@@ -131,7 +123,6 @@ class BuilderRegistry:
             parent_assay_types: Parent assay types this builder handles
             priority: Selection priority (higher wins)
             requires_parent: Whether builder needs parent entity
-            requires_epic: Whether builder needs EPIC UUID
 
         >>> registry = BuilderRegistry()
         >>> registry.register("MyBuilder", required_hints=["is_image"], priority=5)
@@ -146,7 +137,6 @@ class BuilderRegistry:
             parent_assay_types=set(parent_assay_types) if parent_assay_types else None,
             priority=priority,
             requires_parent=requires_parent,
-            requires_epic=requires_epic,
         )
         self._registrations.append(registration)
 
@@ -155,7 +145,6 @@ class BuilderRegistry:
         hints: list[str],
         assay_type: str | None,
         has_parent: bool = False,
-        has_epic: bool = False,
         parent_assay_type: str | None = None,
     ) -> str | None:
         """Find the best matching builder for the given criteria.
@@ -164,7 +153,6 @@ class BuilderRegistry:
             hints: List of vitessce-hints
             assay_type: Assay type string
             has_parent: Whether parent UUID is available
-            has_epic: Whether EPIC UUID is available
             parent_assay_type: Assay type of parent entity (if has_parent)
 
         Returns:
@@ -176,11 +164,7 @@ class BuilderRegistry:
         >>> registry.find_builder(["is_image"], None)
         'HighPriority'
         """
-        matching = [
-            reg
-            for reg in self._registrations
-            if reg.matches(hints, assay_type, has_parent, has_epic, parent_assay_type)
-        ]
+        matching = [reg for reg in self._registrations if reg.matches(hints, assay_type, has_parent, parent_assay_type)]
 
         if not matching:
             return None
@@ -194,7 +178,6 @@ class BuilderRegistry:
         hints: list[str],
         assay_type: str | None,
         has_parent: bool = False,
-        has_epic: bool = False,
         parent_assay_type: str | None = None,
     ) -> dict:
         """Get detailed diagnostic information about builder matching.
@@ -205,7 +188,6 @@ class BuilderRegistry:
             hints: List of vitessce-hints
             assay_type: Assay type string
             has_parent: Whether parent UUID is available
-            has_epic: Whether EPIC UUID is available
             parent_assay_type: Assay type of parent entity (if has_parent)
 
         Returns:
@@ -253,10 +235,6 @@ class BuilderRegistry:
             if reg.requires_parent and not has_parent:
                 reasons.append("requires parent but none provided")
 
-            # Check epic requirement
-            if reg.requires_epic and not has_epic:
-                reasons.append("requires EPIC UUID but none provided")
-
             if reasons:
                 non_matching_reasons.append({"builder": reg.builder_name, "reasons": reasons})
             else:
@@ -276,7 +254,6 @@ class BuilderRegistry:
                 "hints": sorted(hints),
                 "assay_type": assay_type,
                 "has_parent": has_parent,
-                "has_epic": has_epic,
                 "parent_assay_type": parent_assay_type,
             },
         }
@@ -286,7 +263,6 @@ class BuilderRegistry:
         hints: list[str],
         assay_type: str | None,
         has_parent: bool = False,
-        has_epic: bool = False,
         parent_assay_type: str | None = None,
     ) -> str:
         """Generate a detailed error message when no builder matches.
@@ -295,7 +271,6 @@ class BuilderRegistry:
             hints: List of vitessce-hints
             assay_type: Assay type string
             has_parent: Whether parent UUID is available
-            has_epic: Whether EPIC UUID is available
             parent_assay_type: Assay type of parent entity (if has_parent)
 
         Returns:
@@ -307,7 +282,7 @@ class BuilderRegistry:
         >>> "No builder found" in msg
         True
         """
-        diagnostics = self.get_match_diagnostics(hints, assay_type, has_parent, has_epic, parent_assay_type)
+        diagnostics = self.get_match_diagnostics(hints, assay_type, has_parent, parent_assay_type)
 
         if diagnostics["selected"]:
             return f"Selected builder: {diagnostics['selected']} (priority={diagnostics['matching_builders'][0]['priority']})"
@@ -322,8 +297,6 @@ class BuilderRegistry:
 
         if has_parent and parent_assay_type:
             lines.append(f"  Parent assay type: {parent_assay_type}")
-        if has_epic:
-            lines.append(f"  Has EPIC UUID: {has_epic}")
 
         lines.append("")
         lines.append(f"Evaluated {len(self._registrations)} builders:")
@@ -340,20 +313,6 @@ class BuilderRegistry:
                     lines.append(f"      {reason}")
 
         return "\n".join(lines)
-
-    def list_builders(self) -> list[str]:
-        """List all registered builder names.
-
-        Returns:
-            List of builder names
-
-        >>> registry = BuilderRegistry()
-        >>> registry.register("Builder1")
-        >>> registry.register("Builder2")
-        >>> sorted(registry.list_builders())
-        ['Builder1', 'Builder2']
-        """
-        return [reg.builder_name for reg in self._registrations]
 
 
 # Global registry instance

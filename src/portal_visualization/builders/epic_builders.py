@@ -1,6 +1,5 @@
 import logging
 import random
-import re
 
 from requests import get
 from vitessce import (
@@ -13,14 +12,19 @@ from vitessce import CoordinationLevel as CL
 
 from ..constants import REQUEST_TIMEOUT
 from ..paths import (
-    IMAGE_METADATA_DIR,
     IMAGE_PYRAMID_DIR,
-    OFFSETS_DIR,
     SEGMENTATION_SUBDIR,
     SEGMENTATION_SUPPORT_IMAGE_SUBDIR,
     SEGMENTATION_ZARR_STORES,
 )
-from ..utils import get_conf_cells, get_image_metadata, get_image_scale, get_matches, with_config_builder_user_agent
+from ..utils import (
+    get_conf_cells,
+    get_image_metadata,
+    get_image_scale,
+    get_matches,
+    get_offsets_and_metadata_paths,
+    with_config_builder_user_agent,
+)
 from .base_builders import ViewConfBuilder
 
 logger = logging.getLogger(__name__)
@@ -137,13 +141,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
         """Extract base image metadata from the entity's own files."""
         filtered_images = self._find_base_images()
 
-        # Build metadata URL by replacing pyramid dir and extension
-        metadata_path = re.sub(
-            r"ome\.tiff?",
-            "metadata.json",
-            re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, filtered_images[0]),
-        )
-
+        _, metadata_path = get_offsets_and_metadata_paths(filtered_images[0])
         metadata_url = self._build_assets_url(metadata_path)
         return get_image_metadata(self, metadata_url)
 
@@ -154,11 +152,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
 
         img_url = self._build_assets_url(img_path)
 
-        offsets_path = re.sub(
-            r"ome\.tiff?",
-            "offsets.json",
-            re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_path),
-        )
+        offsets_path, _ = get_offsets_and_metadata_paths(img_path)
         offsets_url = self._build_assets_url(offsets_path)
 
         return img_url, offsets_url
@@ -186,23 +180,7 @@ class SegmentationMaskBuilder(ViewConfBuilder):
 
     def segmentations_ome_offset_url(self, img_path):
         img_url = self._build_assets_url(f"{SEGMENTATION_SUBDIR}/{img_path}")
-        return (
-            img_url,
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "offsets.json",
-                    re.sub(IMAGE_PYRAMID_DIR, OFFSETS_DIR, img_url),
-                )
-            ),
-            str(
-                re.sub(
-                    r"ome\.tiff?",
-                    "metadata.json",
-                    re.sub(IMAGE_PYRAMID_DIR, IMAGE_METADATA_DIR, img_url),
-                )
-            ),
-        )
+        return (img_url, *get_offsets_and_metadata_paths(img_url))
 
     def read_metadata_from_url(self):  # pragma: no cover
         mask_names = []
@@ -232,6 +210,8 @@ def create_segmentation_objects(self, base_url, mask_names):  # pragma: no cover
         segmentations_zarr = AnnDataWrapper(
             adata_url=mask_url,
             is_zip=self._is_zarr_zip,
+            # The URL carries no token (zarr_store_url uses use_token=False), so auth rides here.
+            request_init=self._get_request_init(),
             obs_locations_path="obsm/X_spatial",
             obs_labels_names=mask_name,
             coordination_values={"obsType": mask_name},
