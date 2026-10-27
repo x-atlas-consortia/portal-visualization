@@ -306,7 +306,8 @@ class ApiClient:
             # about "files". Bill confirms that when the new structure comes in
             # there will be a period of backward compatibility to allow us to migrate.
 
-            metadata = derived_entity.get("metadata", {})
+            # A document can carry an explicit `"metadata": null`.
+            metadata = derived_entity.get("metadata") or {}
 
             if metadata.get("files"):  # pragma: no cover  # We have separate tests for the builder logic
                 derived_entity["files"] = metadata.get("files", [])
@@ -334,6 +335,9 @@ class ApiClient:
                     # Builders use this to read a handful of scalars off a related entity
                     # (soft_assaytype, hints, files), never its nested relative lists.
                     uuid = entity if isinstance(entity, str) else entity.get("uuid")
+                    # The parent is already in hand (vis-lift passes the page's entity), so don't fetch it again.
+                    if isinstance(parent, dict) and uuid == parent.get("uuid"):
+                        return parent
                     return self.get_entity(uuid=uuid, source_exclude=HEAVY_RELATIVE_FIELDS)
 
                 Builder = get_view_config_builder(entity, get_entity, parent)
@@ -413,7 +417,9 @@ class ApiClient:
             try:
                 publication_resp = self._file_request(publication_json_path)
                 publication_json = json.loads(publication_resp)
-            except HTTPException:  # pragma: no cover
+            # A failed fetch (aborted, or an unlisted status re-raised) or a non-JSON body leaves the
+            # page without ancillary data rather than failing it.
+            except (HTTPException, requests.exceptions.RequestException, ValueError):
                 current_app.logger.error(f"Fetching publication ancillary json threw error: {traceback.format_exc()}")
 
         return PublicationJSONLiftedUUID(
@@ -559,7 +565,7 @@ def _flatten_sources(sources, non_metadata_fields):
         for source in sources
     ]
     for source in flat_sources:
-        if "assay_type" in source.get("metadata", {}):
+        if "assay_type" in (source.get("metadata") or {}):
             # For donors, this is the metadata in EAV form,
             # for samples, this is a placeholder for dev-search,
             # but for datasets, we want to move it up a level.

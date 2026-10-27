@@ -576,6 +576,39 @@ def test_get_publication_ancillary_json(app, mocker, groups_token):
         assert result.vis_lifted_uuid == "ABC123"
 
 
+def mock_get_response(status_code, body):
+    def get(path, **kwargs):
+        response = requests.Response()
+        response.status_code = status_code
+        response._content = body.encode()
+        response.url = path
+        return response
+
+    return get
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body"),
+    [(500, "Server error"), (403, "Forbidden"), (404, "Not found"), (200, "<html>not json</html>")],
+)
+def test_get_publication_ancillary_json_survives_bad_asset(app, mocker, status_code, body):
+    """A failed or non-JSON ancillary file leaves the publication page without it, instead of a 500."""
+    mocker.patch("requests.Session.post", side_effect=mock_es_post)
+    mocker.patch("requests.Session.get", side_effect=mock_get_response(status_code, body))
+    with app.app_context():
+        result = ApiClient().get_publication_ancillary_json({"uuid": "ABC123"})
+    assert result.publication_json == {}
+    assert result.vis_lifted_uuid == "ABC123"
+
+
+def test_vis_lift_tolerates_null_metadata(app, mocker):
+    """A derived entity with `"metadata": null` gets the missing-files error, not a 500."""
+    mocker.patch.object(ApiClient, "get_descendant_to_lift", return_value={"uuid": "ABC123", "metadata": None})
+    with app.app_context():
+        result = ApiClient().get_vitessce_conf_cells_and_lifted_uuid({"uuid": "12345"})
+    assert result.vitessce_conf == related_entity_no_files_error
+
+
 def test_get_metadata_descriptions(app, mocker):
     mocker.patch("requests.Session.get", side_effect=mock_get_s3_json_file)
     with app.app_context():

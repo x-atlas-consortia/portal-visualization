@@ -214,7 +214,6 @@ Examples:
     parser.add_argument("--assay-type", help="Assay type to test")
     parser.add_argument("--parent-assay-type", help="Parent assay type to test")
     parser.add_argument("--has-parent", action="store_true", help="Simulate having a parent")
-    parser.add_argument("--has-epic", action="store_true", help="Simulate having an EPIC UUID")
     parser.add_argument("--token", help="Globus groups token for protected datasets", default="")
 
     args = parser.parse_args()
@@ -225,15 +224,13 @@ Examples:
         assay_type = args.assay_type
         parent_assay_type = args.parent_assay_type
         has_parent = args.has_parent
-        has_epic = args.has_epic
     else:
         # Load from JSON
         entity = get_entity_from_args(args.url, args.json, args.token)
-        hints = entity.get("vitessce-hints", [])
+        hints = entity.get("vitessce-hints") or []
         assay_type = entity.get("soft_assaytype")
         parent_assay_type = args.parent_assay_type
         has_parent = args.has_parent
-        has_epic = args.has_epic
 
     print("=" * 80)
     print("BUILDER SELECTION DIAGNOSTICS")
@@ -249,7 +246,6 @@ Examples:
         hints=hints,
         assay_type=assay_type,
         has_parent=has_parent,
-        has_epic=has_epic,
         parent_assay_type=parent_assay_type,
     )
 
@@ -259,8 +255,6 @@ Examples:
     print(f"  Has parent: {diagnostics['search_criteria']['has_parent']}")
     if parent_assay_type:
         print(f"  Parent assay type: {parent_assay_type}")
-    if has_epic:
-        print(f"  Has EPIC UUID: {has_epic}")
     print()
 
     if diagnostics["selected"]:
@@ -276,7 +270,11 @@ Examples:
     else:
         print("NO BUILDER MATCHED")
         print()
-        print(registry.format_no_match_message(hints, assay_type, has_parent, has_epic, parent_assay_type))
+        print(
+            registry.format_no_match_message(
+                hints, assay_type, has_parent=has_parent, parent_assay_type=parent_assay_type
+            )
+        )
 
     print("=" * 80)
 

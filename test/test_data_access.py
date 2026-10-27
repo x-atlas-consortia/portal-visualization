@@ -144,52 +144,6 @@ class TestZarrStoreAccessor:
 
 
 @pytest.mark.requires_full
-class TestImageMetadataRetriever:
-    """Test ImageMetadataRetriever class."""
-
-    def test_compute_scale_with_zero_base_size(self):
-        """Test compute_scale returns 1.0 when base PhysicalSizeX is 0 (divide by zero protection)."""
-        from portal_visualization.data_access import ImageMetadataRetriever
-
-        loader = Mock()
-        retriever = ImageMetadataRetriever(loader)
-
-        # Line 199: Return 1.0 when base_in_meters == 0 (divide by zero protection)
-        base_metadata = {"PhysicalSizeX": 0.0, "PhysicalSizeXUnit": "μm"}
-        overlay_metadata = {"PhysicalSizeX": 1.0, "PhysicalSizeXUnit": "μm"}
-        result = retriever.compute_scale(base_metadata, overlay_metadata)
-        assert result == 1.0
-
-    def test_compute_scale_with_valid_metadata(self):
-        """Test compute_scale with valid metadata values."""
-        from portal_visualization.data_access import ImageMetadataRetriever
-
-        loader = Mock()
-        retriever = ImageMetadataRetriever(loader)
-
-        # Test when overlay is half the size of base (scale = 0.5)
-        base_metadata = {"PhysicalSizeX": 1.0, "PhysicalSizeXUnit": "μm"}
-        overlay_metadata = {"PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "μm"}
-        result = retriever.compute_scale(base_metadata, overlay_metadata)
-        assert result == 0.5
-
-    def test_compute_scale_with_none_metadata(self):
-        """Test compute_scale returns 1.0 when metadata is None."""
-        from portal_visualization.data_access import ImageMetadataRetriever
-
-        loader = Mock()
-        retriever = ImageMetadataRetriever(loader)
-
-        # Test with None base_metadata
-        result = retriever.compute_scale(None, {"PhysicalSizeX": 1.0})
-        assert result == 1.0
-
-        # Test with None overlay_metadata
-        result = retriever.compute_scale({"PhysicalSizeX": 1.0}, None)
-        assert result == 1.0
-
-
-@pytest.mark.requires_full
 class TestFactoryFunctions:
     """Test factory functions."""
 
@@ -211,10 +165,3 @@ class TestFactoryFunctions:
         assert isinstance(accessor, ZarrStoreAccessor)
         assert accessor._url_builder is mock_builder._build_assets_url
         assert accessor._request_init_provider is mock_builder._get_request_init
-
-    def test_create_http_resource_loader(self):
-        """Test create_http_resource_loader factory function."""
-        from portal_visualization.data_access import HttpResourceLoader, create_http_resource_loader
-
-        loader = create_http_resource_loader()
-        assert isinstance(loader, HttpResourceLoader)

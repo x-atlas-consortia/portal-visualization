@@ -1642,6 +1642,32 @@ def test_read_zip_zarr_opens_store(mocker):
 
 
 @pytest.mark.requires_full
+@pytest.mark.parametrize("reader", ["read_zarr", "read_zip_zarr"])
+def test_zarr_reads_carry_timeouts(reader, mocker):
+    """The aiohttp session fsspec opens for a zarr store must get the connect/read timeouts and
+    keep an overall cap, so a stalled or trickling assets server can't hold a worker."""
+    from src.portal_visualization import utils
+    from src.portal_visualization.constants import REQUEST_TIMEOUT
+
+    http_fs = mocker.patch.object(utils, "_SafeHTTPFileSystem")
+    zip_fs = mocker.patch.object(utils, "_SafeZipFileSystem")
+    mocker.patch.object(utils, "AsyncFileSystemWrapper")
+    mocker.patch.object(utils.zarr.storage, "FsspecStore")
+    mocker.patch.object(utils.zarr, "open_group")
+
+    getattr(utils, reader)("https://example.com/x.zarr", {"headers": {"Authorization": "Bearer token"}})
+
+    if reader == "read_zarr":
+        client_kwargs = http_fs.call_args.kwargs["client_kwargs"]
+    else:
+        client_kwargs = zip_fs.call_args.kwargs["target_options"]["client_kwargs"]
+    timeout = client_kwargs["timeout"]
+    assert (timeout.sock_connect, timeout.sock_read) == REQUEST_TIMEOUT
+    assert timeout.total
+    assert client_kwargs["headers"]["Authorization"] == "Bearer token"
+
+
+@pytest.mark.requires_full
 def test_read_zip_zarr_sends_auth_header():
     """Non-published assets 403 without the Authorization header, so read_zip_zarr must hand the
     request_init headers to the filesystem that fetches the archive (ZipFileSystem spells those
@@ -1714,6 +1740,33 @@ def test_visium_feature_labels_require_hugo_symbol(has_hugo_symbol, mocker):
     conf, _ = SpatialMultiomicAnnDataZarrViewConfBuilder(entity, groups_token, assets_url).get_conf_cells()
 
     assert ("var/hugo_symbol" in json.dumps(conf)) == has_hugo_symbol
+
+
+@pytest.mark.requires_full
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [("gene456", "ENSG00000139619"), ("not_in_dataset", "not_in_dataset")],
+)
+def test_marker_gene_resolves_to_ensembl_id(marker, expected, mocker):
+    """A ?marker= gene the dataset lacks keeps the raw marker instead of raising IndexError."""
+    from src.portal_visualization.builders.anndata_builders import RNASeqAnnDataZarrViewConfBuilder
+
+    z = zarr.open_group()
+    z.create_group("obs").attrs["encoding-version"] = "0.1.0"
+    var = z.create_group("var")
+    var.attrs["_index"] = "index"
+    var["index"] = np.asarray(["ENSG00000139618", "ENSG00000139619"])
+    var["hugo_symbol"] = np.asarray([0, 1])
+    var["hugo_symbol"].attrs["categories"] = "hugo_categories"
+    var["hugo_categories"] = np.asarray(["gene123", "gene456"])
+    mocker.patch("src.portal_visualization.data_access.read_zarr", return_value=z)
+
+    builder = RNASeqAnnDataZarrViewConfBuilder(
+        {"uuid": "test", "status": "Published", "files": []}, groups_token, assets_url
+    )
+    builder._set_up_marker_gene(marker)
+
+    assert builder._marker == expected
 
 
 @pytest.mark.requires_full

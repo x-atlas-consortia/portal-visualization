@@ -1,5 +1,4 @@
 import logging
-import warnings
 
 from .builder_registry import get_registry, populate_registry
 from .builders.base_builders import NullViewConfBuilder
@@ -184,15 +183,16 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None):
     'SpatialMultiomicAnnDataZarrViewConfBuilder'
     >>> _get_builder_name_from_registry({"uuid": "test", "vitessce-hints": []}, None)
     'NullViewConfBuilder'
+    >>> _get_builder_name_from_registry({"uuid": "test", "vitessce-hints": None}, None)
+    'NullViewConfBuilder'
     """
     _ensure_registry_initialized()
     registry = get_registry()
 
-    hints = entity.get("vitessce-hints", [])
+    # Documents can carry an explicit null.
+    hints = entity.get("vitessce-hints") or []
     assay_type = entity.get("soft_assaytype")
     has_parent = parent is not None
-    # Detect EPIC datasets by checking for explicit EPIC hints
-    has_epic = "epic" in hints
 
     # Get parent assay type if parent exists
     parent_assay_type = None
@@ -204,28 +204,16 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None):
             # Parent entity not found or doesn't have soft_assaytype
             pass
 
-    builder_name = registry.find_builder(
-        hints=hints,
-        assay_type=assay_type,
-        has_parent=has_parent,
-        has_epic=has_epic,
-        parent_assay_type=parent_assay_type,
-    )
-
-    if builder_name is None:  # pragma: no cover
-        # No match found - generate detailed diagnostic message
-        error_msg = registry.format_no_match_message(
+    # The registry's NullViewConfBuilder entry matches anything; the fallback covers that entry changing.
+    return (
+        registry.find_builder(
             hints=hints,
             assay_type=assay_type,
             has_parent=has_parent,
-            has_epic=has_epic,
             parent_assay_type=parent_assay_type,
         )
-        warnings.warn(f"Builder selection failed:\n{error_msg}", UserWarning, stacklevel=2)
-        # Fallback to NullViewConfBuilder
-        return "NullViewConfBuilder"
-
-    return builder_name
+        or "NullViewConfBuilder"
+    )
 
 
 def has_visualization(entity, get_entity, parent=None):
