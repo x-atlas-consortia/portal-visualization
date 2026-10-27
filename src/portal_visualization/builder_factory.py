@@ -204,12 +204,15 @@ def _get_builder_name_from_registry(entity, get_entity, parent=None):
             # Parent entity not found or doesn't have soft_assaytype
             pass
 
-    # The registry's NullViewConfBuilder entry matches anything, so this always finds a builder.
-    return registry.find_builder(
-        hints=hints,
-        assay_type=assay_type,
-        has_parent=has_parent,
-        parent_assay_type=parent_assay_type,
+    # The registry's NullViewConfBuilder entry matches anything; the fallback covers that entry changing.
+    return (
+        registry.find_builder(
+            hints=hints,
+            assay_type=assay_type,
+            has_parent=has_parent,
+            parent_assay_type=parent_assay_type,
+        )
+        or "NullViewConfBuilder"
     )
 
 

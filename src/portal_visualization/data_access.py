@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
-    from .utils import read_zarr, read_zip_zarr
+    from .utils import read_zarr, read_zip_zarr, without_token
 
     _FULL_DEPS_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -70,7 +70,7 @@ class ZarrStoreAccessor:
             try:
                 return read_zip_zarr(zarr_url, request_init)
             except Exception as e:  # pragma: no cover
-                logger.error("Error opening the zip zarr file. %s", e)
+                logger.error("Error opening the zip zarr file. %s", without_token(e))
                 return None
         else:
             zarr_url = self._url_builder(path, use_token=False)

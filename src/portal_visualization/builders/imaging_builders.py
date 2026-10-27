@@ -637,8 +637,8 @@ class Kaggle1SegImagePyramidViewConfBuilder(AbstractImagingViewConfBuilder):
         support_uuid = support_entity.get("uuid")
 
         # 2. Find base image in support entity's files
-        support_files = support_entity.get("files", [])
-        if not support_files and support_entity.get("metadata", {}).get("files"):
+        support_files = support_entity.get("files") or []
+        if not support_files and (support_entity.get("metadata") or {}).get("files"):
             support_files = support_entity["metadata"]["files"]
         support_file_paths = [f["rel_path"] for f in support_files]
 

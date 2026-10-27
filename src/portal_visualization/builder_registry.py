@@ -35,6 +35,7 @@ class BuilderRegistration:
         self,
         hints: list[str],
         assay_type: str | None,
+        *,
         has_parent: bool,
         parent_assay_type: str | None = None,
     ) -> bool:
@@ -54,11 +55,11 @@ class BuilderRegistration:
         ...     required_hints={"is_image", "rna"},
         ...     forbidden_hints={"is_json"}
         ... )
-        >>> reg.matches(["is_image", "rna", "spatial"], None, False)
+        >>> reg.matches(["is_image", "rna", "spatial"], None, has_parent=False)
         True
-        >>> reg.matches(["is_image", "rna", "is_json"], None, False)
+        >>> reg.matches(["is_image", "rna", "is_json"], None, has_parent=False)
         False
-        >>> reg.matches(["is_image"], None, False)
+        >>> reg.matches(["is_image"], None, has_parent=False)
         False
         """
         hint_set = set(hints)
@@ -95,7 +96,7 @@ class BuilderRegistry:
     ...     required_hints=["is_image"],
     ...     priority=10
     ... )
-    >>> match = registry.find_builder(["is_image", "rna"], None, False)
+    >>> match = registry.find_builder(["is_image", "rna"], None)
     >>> match
     'TestBuilder'
     """
@@ -144,6 +145,7 @@ class BuilderRegistry:
         self,
         hints: list[str],
         assay_type: str | None,
+        *,
         has_parent: bool = False,
         parent_assay_type: str | None = None,
     ) -> str | None:
@@ -164,7 +166,11 @@ class BuilderRegistry:
         >>> registry.find_builder(["is_image"], None)
         'HighPriority'
         """
-        matching = [reg for reg in self._registrations if reg.matches(hints, assay_type, has_parent, parent_assay_type)]
+        matching = [
+            reg
+            for reg in self._registrations
+            if reg.matches(hints, assay_type, has_parent=has_parent, parent_assay_type=parent_assay_type)
+        ]
 
         if not matching:
             return None
@@ -177,6 +183,7 @@ class BuilderRegistry:
         self,
         hints: list[str],
         assay_type: str | None,
+        *,
         has_parent: bool = False,
         parent_assay_type: str | None = None,
     ) -> dict:
@@ -262,6 +269,7 @@ class BuilderRegistry:
         self,
         hints: list[str],
         assay_type: str | None,
+        *,
         has_parent: bool = False,
         parent_assay_type: str | None = None,
     ) -> str:
@@ -282,7 +290,9 @@ class BuilderRegistry:
         >>> "No builder found" in msg
         True
         """
-        diagnostics = self.get_match_diagnostics(hints, assay_type, has_parent, parent_assay_type)
+        diagnostics = self.get_match_diagnostics(
+            hints, assay_type, has_parent=has_parent, parent_assay_type=parent_assay_type
+        )
 
         if diagnostics["selected"]:
             return f"Selected builder: {diagnostics['selected']} (priority={diagnostics['matching_builders'][0]['priority']})"

@@ -54,7 +54,7 @@ class TestRegistryExperimental:
         )
 
         # Line 74: Return False when forbidden hint present (line 64 check)
-        assert reg.matches(["is_image", "exclude_me"], None, False) is False
+        assert reg.matches(["is_image", "exclude_me"], None, has_parent=False) is False
 
         # Test with assay type requirement
         reg = BuilderRegistration(
@@ -65,9 +65,9 @@ class TestRegistryExperimental:
         )
 
         # Line 70: Return False when assay_type doesn't match
-        assert reg.matches(["is_image"], "wrong_assay", False) is False
+        assert reg.matches(["is_image"], "wrong_assay", has_parent=False) is False
         # Should match when correct
-        assert reg.matches(["is_image"], "CODEX", False) is True
+        assert reg.matches(["is_image"], "CODEX", has_parent=False) is True
 
         # Test requires_parent check (line 74)
         reg = BuilderRegistration(
@@ -77,9 +77,9 @@ class TestRegistryExperimental:
             priority=5,
         )
         # Line 74: Return False when parent required but not provided
-        assert reg.matches(["is_image"], None, False, None) is False
+        assert reg.matches(["is_image"], None, has_parent=False) is False
         # Should match when parent provided
-        assert reg.matches(["is_image"], None, True, None) is True
+        assert reg.matches(["is_image"], None, has_parent=True) is True
 
         # Test parent_assay_types check (line 84)
         reg = BuilderRegistration(
@@ -89,9 +89,9 @@ class TestRegistryExperimental:
             priority=5,
         )
         # Line 84: Return False when parent_assay_type doesn't match
-        assert reg.matches(["is_image"], None, True, "wrong_type") is False
+        assert reg.matches(["is_image"], None, has_parent=True, parent_assay_type="wrong_type") is False
         # Should match when correct parent assay type
-        assert reg.matches(["is_image"], None, True, "SEQFISH") is True
+        assert reg.matches(["is_image"], None, has_parent=True, parent_assay_type="SEQFISH") is True
 
     def test_find_builder_returns_none_when_no_match(self):
         """Test BuilderRegistry.find_builder returns None when no matches."""
@@ -101,7 +101,7 @@ class TestRegistryExperimental:
         registry.register("OnlyForCodex", required_hints=["is_image"], assay_types={"CODEX"})
 
         # Line 159: Return None when no matches
-        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY", False, None)
+        result = registry.find_builder(["is_image"], "DIFFERENT_ASSAY")
         assert result is None
 
     def test_registry_parent_assay_type_fetching(self):

@@ -565,7 +565,7 @@ def _flatten_sources(sources, non_metadata_fields):
         for source in sources
     ]
     for source in flat_sources:
-        if "assay_type" in source.get("metadata", {}):
+        if "assay_type" in (source.get("metadata") or {}):
             # For donors, this is the metadata in EAV form,
             # for samples, this is a placeholder for dev-search,
             # but for datasets, we want to move it up a level.

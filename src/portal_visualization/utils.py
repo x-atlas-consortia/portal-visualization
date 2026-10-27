@@ -53,18 +53,20 @@ def with_config_builder_user_agent(request_init):
 
 def _fsspec_client_kwargs(request_init):
     """aiohttp session kwargs for fsspec reads: the config-builder User-Agent, plus the connect and
-    read timeouts the ``requests`` calls use. Without them aiohttp waits up to 5 minutes.
+    read timeouts the ``requests`` calls use. Those alone would drop aiohttp's default 5-minute
+    ``total``, letting a server that trickles bytes hold a worker indefinitely, so each request
+    (one range read) also keeps a 2-minute overall cap.
 
     Kept apart from ``with_config_builder_user_agent``, whose result is also splatted into ``requests.get``.
 
-    >>> kwargs = _fsspec_client_kwargs(None)
-    >>> (kwargs["timeout"].sock_connect, kwargs["timeout"].sock_read) == REQUEST_TIMEOUT
-    True
+    >>> timeout = _fsspec_client_kwargs(None)["timeout"]
+    >>> (timeout.sock_connect, timeout.sock_read) == REQUEST_TIMEOUT, timeout.total
+    (True, 120)
     """
     connect, read = REQUEST_TIMEOUT
     return {
         **with_config_builder_user_agent(request_init),
-        "timeout": aiohttp.ClientTimeout(sock_connect=connect, sock_read=read),
+        "timeout": aiohttp.ClientTimeout(total=120, sock_connect=connect, sock_read=read),
     }
 
 

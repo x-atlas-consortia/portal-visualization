@@ -227,7 +227,7 @@ Examples:
     else:
         # Load from JSON
         entity = get_entity_from_args(args.url, args.json, args.token)
-        hints = entity.get("vitessce-hints", [])
+        hints = entity.get("vitessce-hints") or []
         assay_type = entity.get("soft_assaytype")
         parent_assay_type = args.parent_assay_type
         has_parent = args.has_parent
@@ -270,7 +270,11 @@ Examples:
     else:
         print("NO BUILDER MATCHED")
         print()
-        print(registry.format_no_match_message(hints, assay_type, has_parent, parent_assay_type))
+        print(
+            registry.format_no_match_message(
+                hints, assay_type, has_parent=has_parent, parent_assay_type=parent_assay_type
+            )
+        )
 
     print("=" * 80)
 

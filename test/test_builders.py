@@ -1642,6 +1642,32 @@ def test_read_zip_zarr_opens_store(mocker):
 
 
 @pytest.mark.requires_full
+@pytest.mark.parametrize("reader", ["read_zarr", "read_zip_zarr"])
+def test_zarr_reads_carry_timeouts(reader, mocker):
+    """The aiohttp session fsspec opens for a zarr store must get the connect/read timeouts and
+    keep an overall cap, so a stalled or trickling assets server can't hold a worker."""
+    from src.portal_visualization import utils
+    from src.portal_visualization.constants import REQUEST_TIMEOUT
+
+    http_fs = mocker.patch.object(utils, "_SafeHTTPFileSystem")
+    zip_fs = mocker.patch.object(utils, "_SafeZipFileSystem")
+    mocker.patch.object(utils, "AsyncFileSystemWrapper")
+    mocker.patch.object(utils.zarr.storage, "FsspecStore")
+    mocker.patch.object(utils.zarr, "open_group")
+
+    getattr(utils, reader)("https://example.com/x.zarr", {"headers": {"Authorization": "Bearer token"}})
+
+    if reader == "read_zarr":
+        client_kwargs = http_fs.call_args.kwargs["client_kwargs"]
+    else:
+        client_kwargs = zip_fs.call_args.kwargs["target_options"]["client_kwargs"]
+    timeout = client_kwargs["timeout"]
+    assert (timeout.sock_connect, timeout.sock_read) == REQUEST_TIMEOUT
+    assert timeout.total
+    assert client_kwargs["headers"]["Authorization"] == "Bearer token"
+
+
+@pytest.mark.requires_full
 def test_read_zip_zarr_sends_auth_header():
     """Non-published assets 403 without the Authorization header, so read_zip_zarr must hand the
     request_init headers to the filesystem that fetches the archive (ZipFileSystem spells those
